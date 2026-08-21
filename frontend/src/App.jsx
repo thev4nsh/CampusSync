@@ -89,13 +89,15 @@ export default function App() {
   const handleLogin = (selectedRole, userPayload = null) => {
     setRole(selectedRole);
     if (selectedRole === 'student') {
-      setCurrentUser(userPayload || students[0]);
-      showToast(`Welcome back, Vansh! Logged in as Student.`, `info`);
+      const user = userPayload || students[0];
+      setCurrentUser(user);
+      showToast(`Welcome back, ${user.name}! Logged in as Student.`, `info`);
     } else if (selectedRole === 'teacher') {
-      setCurrentUser(userPayload || teachers[0]);
-      showToast(`Welcome, Prof. Rajesh Sharma! Logged in as Faculty.`, `info`);
+      const user = userPayload || teachers[0];
+      setCurrentUser(user);
+      showToast(`Welcome, ${user.name}! Logged in as Faculty.`, `info`);
     } else if (selectedRole === 'admin') {
-      setCurrentUser({ name: 'System Admin', email: 'admin@campussync.edu', role: 'Administrator' });
+      setCurrentUser(userPayload || { name: 'System Admin', email: 'admin@campussync.edu', role: 'Administrator' });
       showToast(`Logged in as System Administrator.`, `info`);
     }
   };
@@ -193,7 +195,11 @@ export default function App() {
 
       {/* Main View Router */}
       {role === 'login' && (
-        <Login onLogin={handleLogin} />
+        <Login 
+          onLogin={handleLogin} 
+          students={students}
+          teachers={teachers}
+        />
       )}
 
       {role === 'student' && (
