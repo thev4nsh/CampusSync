@@ -1,5 +1,5 @@
 # CampusSync — Smart Multi-Modal Attendance System
-
+This is A Campus Management Infrastructure software
 
 ## 📁 File Structure
 
