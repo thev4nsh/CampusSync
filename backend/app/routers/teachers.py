@@ -104,11 +104,8 @@ def get_teacher_classes(
     """Retrieve distinct academic classes assigned to this teacher with associated subjects and student counts."""
     valid_class_ids = [a.class_id for a in teacher.subject_assignments if a.class_id is not None]
     if not valid_class_ids:
-        classes = db.query(Class).all()
-    else:
-        classes = db.query(Class).filter(Class.id.in_(valid_class_ids)).all()
-        if not classes:
-            classes = db.query(Class).all()
+        return []
+    classes = db.query(Class).filter(Class.id.in_(valid_class_ids)).all()
 
     results = []
     for c in classes:
@@ -118,14 +115,7 @@ def get_teacher_classes(
             TeacherSubjectAssignment.teacher_id == teacher.id,
             TeacherSubjectAssignment.class_id == c.id
         ).all()
-        if not subjs:
-            subjs = db.query(Subject).join(TeacherSubjectAssignment).filter(
-                TeacherSubjectAssignment.teacher_id == teacher.id
-            ).all()
-
         subject_names = list(set([f"{s.name} ({s.code})" if s.code else s.name for s in subjs]))
-        if not subject_names:
-            subject_names = [s.name for s in db.query(Subject).all()]
 
         results.append(ClassResponse(
             id=c.id,
@@ -161,12 +151,7 @@ def get_teacher_subjects(
             if cls:
                 query = query.filter(TeacherSubjectAssignment.class_id == cls.id)
 
-    subjects = query.distinct().all()
-    if not subjects:
-        # Fallback to all subjects if assignments are not yet configured
-        subjects = db.query(Subject).all()
-
-    return subjects
+    return query.distinct().all()
 
 
 @router.get("/classes/{class_id}/students", response_model=List[StudentResponse])
@@ -179,27 +164,22 @@ def get_class_students_roster(
     target_class = None
     clean_id_str = str(class_id).strip()
 
-    # 1. Try matching by numeric ID
+    # Resolve only an exact class ID or exact class name; never fall back to another class.
     try:
         numeric_id = int(clean_id_str)
         target_class = db.query(Class).filter(Class.id == numeric_id).first()
     except (ValueError, TypeError):
-        pass
-
-    # 2. Try matching by exact Name
-    if not target_class:
         target_class = db.query(Class).filter(Class.name.ilike(clean_id_str)).first()
 
-    # 3. Try matching by partial Name
     if not target_class:
-        target_class = db.query(Class).filter(Class.name.ilike(f"%{clean_id_str}%")).first()
+        raise HTTPException(status_code=404, detail="Class not found.")
 
-    # 4. Fallback to first class
-    if not target_class:
-        target_class = db.query(Class).first()
-
-    if not target_class:
-        return []
+    assignment = db.query(TeacherSubjectAssignment.id).filter(
+        TeacherSubjectAssignment.teacher_id == teacher.id,
+        TeacherSubjectAssignment.class_id == target_class.id
+    ).first()
+    if not assignment:
+        raise HTTPException(status_code=403, detail="You are not assigned to this class.")
 
     students = db.query(Student).filter(Student.class_id == target_class.id).all()
     results = []
@@ -233,11 +213,8 @@ def get_teacher_all_students(
     """Retrieve all students enrolled in classes assigned to this teacher with attendance stats."""
     valid_class_ids = [a.class_id for a in teacher.subject_assignments if a.class_id is not None]
     if not valid_class_ids:
-        students = db.query(Student).all()
-    else:
-        students = db.query(Student).filter(Student.class_id.in_(valid_class_ids)).all()
-        if not students:
-            students = db.query(Student).all()
+        return []
+    students = db.query(Student).filter(Student.class_id.in_(valid_class_ids)).all()
 
     results = []
     for s in students:

@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Union, Optional
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 Hours
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODEL: str = "gpt-6-astra"
 
     # CORS Configuration
     ALLOWED_ORIGINS: Union[str, List[str]] = [

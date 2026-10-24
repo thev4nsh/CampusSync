@@ -7,7 +7,8 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Enum,
-    UniqueConstraint
+    UniqueConstraint,
+    Text
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -178,6 +179,26 @@ class TeacherSubjectAssignment(Base):
     teacher = relationship("Teacher", back_populates="subject_assignments")
     subject = relationship("Subject", back_populates="teacher_assignments")
     class_obj = relationship("Class", back_populates="teacher_assignments")
+
+
+class CourseMaterial(Base):
+    """
+    Text course material with a cached summary for an assigned class and subject.
+    """
+    __tablename__ = "course_materials"
+
+    id = Column(String(36), primary_key=True, index=True)
+    title = Column(String(180), nullable=False)
+    content = Column(Text, nullable=False)
+    content_type = Column(String(30), nullable=False, default="text/markdown")
+    class_id = Column(Integer, ForeignKey("classes.id", ondelete="CASCADE"), nullable=False, index=True)
+    subject_id = Column(Integer, ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True)
+    teacher_id = Column(String(50), ForeignKey("teachers.id", ondelete="CASCADE"), nullable=False, index=True)
+    version = Column(Integer, nullable=False, default=1)
+    summary = Column(Text, nullable=True)
+    summary_version = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
 class AttendanceSession(Base):

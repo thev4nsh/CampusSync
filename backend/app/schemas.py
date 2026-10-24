@@ -1,4 +1,4 @@
-from typing import List, Optional, Generic, TypeVar, Any, Union
+from typing import List, Optional, Generic, TypeVar, Any, Union, Literal
 from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 from app.models import UserRole, AttendanceMethod, AttendanceStatus, DeviceType, SessionStatus
@@ -21,6 +21,57 @@ class PaginatedResponse(BaseModel, Generic[T]):
 # ==============================================================================
 # AUTHENTICATION & USER SCHEMAS
 # ==============================================================================
+
+class CourseMaterialCreate(BaseModel):
+    class_id: int
+    subject_id: int
+    title: str = Field(..., min_length=1, max_length=180)
+    content_type: Literal["text/plain", "text/markdown"] = "text/markdown"
+    content: str = Field(..., min_length=20, max_length=100000)
+
+
+class CourseMaterialUpdate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=180)
+    content_type: Literal["text/plain", "text/markdown"] = "text/markdown"
+    content: str = Field(..., min_length=20, max_length=100000)
+
+class CourseMaterialResponse(BaseModel):
+    id: str
+    title: str
+    class_id: int
+    subject_id: int
+    teacher_id: str
+    content_type: str
+    version: int
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+class CourseMaterialDetailResponse(CourseMaterialResponse):
+    content: str
+
+
+class CourseMaterialSummaryResponse(BaseModel):
+    material_id: str
+    material_version: int
+    summary: str
+
+
+class CourseQuestionRequest(BaseModel):
+    question: str = Field(..., min_length=3, max_length=2000)
+
+
+class CourseCitation(BaseModel):
+    passage_id: str
+    quote: str
+
+
+class CourseQuestionResponse(BaseModel):
+    material_id: str
+    material_version: int
+    answer: str
+    citations: List[CourseCitation]
+    abstained: bool
 
 class LoginRequest(BaseModel):
     identifier: str = Field(..., description="Email address or Student/Teacher ID")

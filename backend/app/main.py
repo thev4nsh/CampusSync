@@ -10,7 +10,8 @@ from app.routers import (
     admin,
     attendance,
     devices,
-    reports
+    reports,
+    learning
 )
 
 # Instantiate the FastAPI Application
@@ -80,3 +81,8 @@ app.include_router(students.router)
 app.include_router(teachers.router)
 app.include_router(admin.router)
 app.include_router(reports.router)
+
+app.include_router(learning.materials_router, prefix=api_prefix)
+app.include_router(learning.ai_router, prefix=api_prefix)
+app.include_router(learning.materials_router)
+app.include_router(learning.ai_router)
