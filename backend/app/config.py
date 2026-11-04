@@ -26,10 +26,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
-    OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = "gpt-6-luna"
-    OPENAI_SUMMARY_MAX_OUTPUT_TOKENS: int = 1200
-    OPENAI_ANSWER_MAX_OUTPUT_TOKENS: int = 900
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-3.6-flash"
+    GEMINI_FALLBACK_MODEL: str = "gemini-3.5-flash-lite"
+    AI_SUMMARY_MAX_OUTPUT_TOKENS: int = 1200
+    AI_ANSWER_MAX_OUTPUT_TOKENS: int = 900
     AI_DAILY_LIMIT_STUDENT: int = 25
     AI_DAILY_LIMIT_STAFF: int = 100
 
@@ -54,10 +55,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_runtime_security(self):
-        if not 128 <= self.OPENAI_SUMMARY_MAX_OUTPUT_TOKENS <= 4000:
-            raise ValueError("OPENAI_SUMMARY_MAX_OUTPUT_TOKENS must be between 128 and 4000.")
-        if not 128 <= self.OPENAI_ANSWER_MAX_OUTPUT_TOKENS <= 4000:
-            raise ValueError("OPENAI_ANSWER_MAX_OUTPUT_TOKENS must be between 128 and 4000.")
+        if not 128 <= self.AI_SUMMARY_MAX_OUTPUT_TOKENS <= 4000:
+            raise ValueError("AI_SUMMARY_MAX_OUTPUT_TOKENS must be between 128 and 4000.")
+        if not 128 <= self.AI_ANSWER_MAX_OUTPUT_TOKENS <= 4000:
+            raise ValueError("AI_ANSWER_MAX_OUTPUT_TOKENS must be between 128 and 4000.")
         if not 1 <= self.AI_DAILY_LIMIT_STUDENT <= 500 or not 1 <= self.AI_DAILY_LIMIT_STAFF <= 1000:
             raise ValueError("AI daily request limits are outside the allowed range.")
         if "*" in self.ALLOWED_ORIGINS:

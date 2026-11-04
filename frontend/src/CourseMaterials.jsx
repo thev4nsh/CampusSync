@@ -18,6 +18,20 @@ import {
 import { learningApi, teacherApi } from './api';
 
 const cardClass = 'rounded-3xl border border-slate-200/80 bg-white shadow-sm shadow-slate-900/[0.03]';
+const MarkdownSummary = React.lazy(() => import('./MarkdownSummary'));
+const SUMMARY_ONLY_TERMS = new Set(['a', 'about', 'are', 'can', 'could', 'describe', 'explain', 'give', 'ideas', 'key', 'main', 'me', 'notes', 'note', 'of', 'overview', 'please', 'summarise', 'summarize', 'summary', 'tell', 'the', 'these', 'this', 'to', 'what', 'you']);
+
+function isSummaryOverviewQuestion(value) {
+  const terms = value.toLowerCase().match(/[a-z0-9]{2,}/g) || [];
+  return terms.length > 0 && terms.every((term) => SUMMARY_ONLY_TERMS.has(term));
+}
+
+function cleanSummaryMarkdown(value) {
+  return (value || '')
+    .replace(/^\s*(?:here(?:'s| is)\s+)?(?:a\s+)?(?:structured,?\s*)?(?:concise\s+)?(?:summary|study guide)(?:\s+of[^:\n]*)?:?\s*\n+/i, '')
+    .replace(/^\s*---\s*$/gm, '')
+    .trim();
+}
 
 function ErrorNotice({ children }) {
   if (!children) return null;
@@ -29,7 +43,32 @@ function ErrorNotice({ children }) {
   );
 }
 
-export default function CourseMaterials({ mode, showToast }) {
+class CourseMaterialsErrorBoundary extends React.Component {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('Course materials view failed to render:', error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <section role="alert" className="mx-auto max-w-3xl rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-900">
+          <h2 className="font-semibold">Course materials could not be displayed.</h2>
+          <p className="mt-2 text-sm">Your selected files have not been uploaded. Reload this page and try again.</p>
+          <button type="button" onClick={() => window.location.reload()} className="mt-4 rounded-lg bg-rose-900 px-4 py-2 text-sm font-semibold text-white">Reload page</button>
+        </section>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function CourseMaterialsView({ mode, showToast }) {
   const isTeacher = mode === 'teacher';
   const [materials, setMaterials] = useState([]);
   const [selectedId, setSelectedId] = useState('');
@@ -50,6 +89,7 @@ export default function CourseMaterials({ mode, showToast }) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [summary, setSummary] = useState('');
+  const [summaryError, setSummaryError] = useState('');
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState(null);
@@ -96,11 +136,12 @@ export default function CourseMaterials({ mode, showToast }) {
     setDetail(null);
     setDetailLoading(true);
     setSummary('');
+    setSummaryError('');
     setAnswer(null);
     setQuestion('');
     setAiError('');
     learningApi.getMaterial(selectedId)
-      .then((item) => { if (active) setDetail(item); })
+      .then((item) => { if (active) { setDetail(item); setSummary(cleanSummaryMarkdown(item.summary)); } })
       .catch((err) => { if (active) setAiError(err.message || 'Could not open this material.'); })
       .finally(() => { if (active) setDetailLoading(false); });
     return () => { active = false; };
@@ -180,6 +221,20 @@ export default function CourseMaterials({ mode, showToast }) {
     setFiles(chosen);
   };
 
+  const handleFilesChange = (event) => {
+    const input = event.currentTarget;
+    try {
+      chooseFiles(input.files);
+    } catch (err) {
+      setFiles([]);
+      setFileError('The selected files could not be read. Please choose them again.');
+      console.error('Course material file selection failed:', err);
+    } finally {
+      // Allow the same file to be selected again after a validation error.
+      input.value = '';
+    }
+  };
+
   const downloadAttachment = async (material, attachment) => {
     setAiError('');
     try {
@@ -197,16 +252,16 @@ export default function CourseMaterials({ mode, showToast }) {
     }
   };
 
-  const generateSummary = async () => {
+  const generateSummary = async (forceRefresh = false) => {
     if (!selectedId) return;
     setSummaryLoading(true);
-    setAiError('');
+    setSummaryError('');
     try {
-      const result = await learningApi.summarize(selectedId);
-      setSummary(result.summary || 'No summary was returned.');
+      const result = await learningApi.summarize(selectedId, forceRefresh);
+      setSummary(cleanSummaryMarkdown(result.summary) || 'No summary was returned.');
       refreshAiStatus();
     } catch (err) {
-      setAiError(err.message || 'Could not generate a summary.');
+      setSummaryError(err.message || 'Could not generate a summary.');
     } finally {
       setSummaryLoading(false);
     }
@@ -217,7 +272,12 @@ export default function CourseMaterials({ mode, showToast }) {
     if (!selectedId || question.trim().length < 3) return;
     setAnswerLoading(true);
     setAiError('');
+    setAnswer(null);
     try {
+      if (summary && isSummaryOverviewQuestion(question)) {
+        setAnswer({ answer: summary, citations: [], abstained: false, fromSummary: true });
+        return;
+      }
       setAnswer(await learningApi.ask(selectedId, question.trim()));
       refreshAiStatus();
     } catch (err) {
@@ -296,7 +356,7 @@ export default function CourseMaterials({ mode, showToast }) {
             <span className="block text-right text-xs font-normal text-slate-400">{content.length.toLocaleString()} / 100,000 characters</span>
           </label>
           <div className="rounded-2xl border border-dashed border-violet-300 bg-violet-50/50 p-5">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-start gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-violet-700 shadow-sm"><UploadCloud className="h-5 w-5" /></span><div><p className="text-sm font-bold text-slate-800">Attach files from your computer</p><p className="mt-1 text-xs leading-5 text-slate-500">PDF, Word, PowerPoint, Excel, text, subtitles, RTF, or image · up to 20 MB each</p></div></div><label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-semibold text-violet-800 shadow-sm hover:bg-violet-100"><UploadCloud className="h-4 w-4" /> Choose files<input ref={fileInputRef} type="file" multiple accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.rtf,.srt,.vtt,.png,.jpg,.jpeg,.webp" onChange={(event) => chooseFiles(event.target.files)} className="sr-only" /></label></div>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-start gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-violet-700 shadow-sm"><UploadCloud className="h-5 w-5" /></span><div><p className="text-sm font-bold text-slate-800">Attach files from your computer</p><p className="mt-1 text-xs leading-5 text-slate-500">PDF, Word, PowerPoint, Excel, text, subtitles, RTF, or image · up to 20 MB each</p></div></div><button type="button" onClick={() => fileInputRef.current?.click()} className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-semibold text-violet-800 shadow-sm hover:bg-violet-100"><UploadCloud className="h-4 w-4" /> Choose files</button><input ref={fileInputRef} type="file" multiple accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv,.rtf,.srt,.vtt,.png,.jpg,.jpeg,.webp" onChange={handleFilesChange} aria-label="Choose course material files" className="sr-only" /></div>
             {files.length > 0 && <ul className="mt-4 grid gap-2 sm:grid-cols-2">{files.map((file, index) => <li key={file.name + file.size + index} className="flex items-center gap-2 rounded-xl border border-violet-100 bg-white px-3 py-2 text-xs"><FileText className="h-4 w-4 shrink-0 text-violet-700" /><span className="min-w-0 flex-1 truncate font-medium text-slate-700">{file.name}</span><span className="shrink-0 text-slate-400">{(file.size / (1024 * 1024)).toFixed(1)} MB</span><button type="button" onClick={() => setFiles((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`Remove ${file.name}`} className="rounded px-1 text-slate-400 hover:bg-rose-50 hover:text-rose-700">×</button></li>)}</ul>}
             {fileError && <p role="alert" className="mt-3 text-sm text-rose-700">{fileError}</p>}
           </div>
@@ -323,23 +383,22 @@ export default function CourseMaterials({ mode, showToast }) {
         </aside>
 
         <div className="min-w-0 space-y-5">
-          {!selectedId && !loading ? <div className={cardClass + ' flex min-h-[420px] flex-col items-center justify-center p-8 text-center'}><div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-100 text-violet-700"><Sparkles className="h-6 w-6" /></div><h3 className="mt-5 text-xl font-bold text-slate-900">Your course copilot is ready</h3><p className="mt-2 max-w-md text-sm leading-6 text-slate-500">{isTeacher ? 'Publish notes for an assigned class to give students an AI-powered study companion.' : 'When your teachers share notes, you can summarize them or ask questions here.'}</p></div> : <>
+          {!selectedId && !loading ? <div className={cardClass + ' flex min-h-[420px] flex-col items-center justify-center p-8 text-center'}><div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-100 text-violet-700"><Sparkles className="h-6 w-6" /></div><h3 className="mt-5 text-xl font-bold text-slate-900">Your Gemini course chat is ready</h3><p className="mt-2 max-w-md text-sm leading-6 text-slate-500">{isTeacher ? 'Publish notes for an assigned class to give students AI-powered study help.' : 'When your teachers share readable notes, you can get a summary or ask Gemini questions about them.'}</p></div> : <>
             <section className={cardClass + ' overflow-hidden'}>
               {detailLoading ? <div className="space-y-4 p-6"><div className="h-5 w-24 animate-pulse rounded bg-slate-100" /><div className="h-8 w-2/3 animate-pulse rounded bg-slate-100" /><div className="h-24 animate-pulse rounded-2xl bg-slate-100" /></div>
-                : detail ? <><div className="flex flex-col gap-5 p-5 sm:p-7 lg:flex-row lg:items-start lg:justify-between"><div className="min-w-0"><span className="inline-flex items-center gap-2 rounded-full bg-violet-50 px-3 py-1.5 text-xs font-bold text-violet-800"><BookOpen className="h-3.5 w-3.5" /> {detail.class_name || classNameFor(detail.class_id) || 'Course material'}{detail.subject_name ? ` · ${detail.subject_name}` : ''}</span><h3 className="mt-3 break-words text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">{detail.title}</h3><p className="mt-2 text-sm text-slate-500">Version {detail.version} · Updated {new Date(detail.updated_at).toLocaleString()}</p></div><button type="button" onClick={generateSummary} disabled={summaryLoading || !detail.ai_ready || aiStatus?.configured === false || (aiStatus?.requests_used_today >= aiStatus?.daily_request_limit)} title={!detail.ai_ready ? 'No readable text was found in this post.' : aiStatus?.configured === false ? 'AI study help is not enabled.' : undefined} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-violet-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-900/15 transition hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50">{summaryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{summaryLoading ? 'Building summary…' : summary ? 'Refresh summary' : detail.source_url ? 'Summarize video' : 'Summarize notes'}</button></div>
+                : detail ? <><div className="flex flex-col gap-5 p-5 sm:p-7 lg:flex-row lg:items-start lg:justify-between"><div className="min-w-0"><span className="inline-flex items-center gap-2 rounded-full bg-violet-50 px-3 py-1.5 text-xs font-bold text-violet-800"><BookOpen className="h-3.5 w-3.5" /> {detail.class_name || classNameFor(detail.class_id) || 'Course material'}{detail.subject_name ? ` · ${detail.subject_name}` : ''}</span><h3 className="mt-3 break-words text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">{detail.title}</h3><p className="mt-2 text-sm text-slate-500">Version {detail.version} · Updated {new Date(detail.updated_at).toLocaleString()}</p></div><button type="button" onClick={() => generateSummary(Boolean(summary))} disabled={summaryLoading || !detail.ai_ready || aiStatus?.configured === false || (aiStatus?.requests_used_today >= aiStatus?.daily_request_limit)} title={!detail.ai_ready ? 'No readable text was found in this post.' : aiStatus?.configured === false ? 'AI study help is not enabled.' : undefined} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-violet-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-900/15 transition hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50">{summaryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{summaryLoading ? 'Building summary…' : summary ? 'Regenerate summary' : detail.source_url ? 'Summarize video' : 'Summarize notes'}</button></div>
                   {detail.source_url && <div className="border-t border-slate-100 px-5 py-4 sm:px-7"><a href={detail.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-800 hover:bg-red-100"><ArrowUpRight className="h-4 w-4" /> Open YouTube lecture</a>{!detail.ai_ready && <p className="mt-2 text-xs text-slate-500">Attach captions (.srt or .vtt), or paste the transcript in the notes, to enable AI summaries.</p>}</div>}
                   {!!detail.attachments?.length && <div className="border-t border-slate-100 px-5 py-4 sm:px-7"><p className="mb-3 text-sm font-bold text-slate-800">Attached classwork files</p><ul className="grid gap-2 sm:grid-cols-2">{detail.attachments.map((attachment) => <li key={attachment.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3"><FileText className="h-5 w-5 shrink-0 text-violet-700" /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-slate-800">{attachment.filename}</span><span className="text-xs text-slate-500">{(attachment.size_bytes / (1024 * 1024)).toFixed(1)} MB</span></span><button type="button" onClick={() => downloadAttachment(detail, attachment)} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:text-violet-800"><Download className="h-4 w-4" /> Download</button></li>)}</ul></div>}
-                  {detail.ai_ready ? <div className="border-t border-slate-100 px-5 py-4 sm:px-7"><details><summary className="cursor-pointer text-sm font-semibold text-slate-600 hover:text-violet-700">Open extracted source notes</summary><div className="mt-3 max-h-80 overflow-y-auto rounded-2xl bg-slate-50 p-4"><pre className="whitespace-pre-wrap break-words font-sans text-sm leading-7 text-slate-600">{detail.content}</pre></div></details></div> : <div className="border-t border-slate-100 px-5 py-4 text-sm text-slate-500">Files are ready to download. AI study tools are available when readable text is present; scanned PDFs and image-only files need OCR support.</div>}
-                  {summary && <div className="mx-5 mb-5 rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-white p-5 sm:mx-7 sm:mb-7 sm:p-6"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-violet-800"><Sparkles className="h-4 w-4" /> AI-generated summary</div><p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{summary}</p></div>}
+                  {detail.ai_ready ? <div className="border-t border-slate-100 px-5 py-5 sm:px-7"><div className="rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-white p-5 sm:p-6"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-violet-800"><Sparkles className="h-4 w-4" /> Gemini study summary</div>{summary && <span className="text-xs text-slate-500">Based on this class material</span>}</div>{summary ? <article className="mt-4 text-sm leading-7 text-slate-700"><React.Suspense fallback={<p>Formatting summary…</p>}><MarkdownSummary content={summary} /></React.Suspense></article> : <p className="mt-3 text-sm leading-6 text-slate-600">Generate a summary to see the main ideas, key terms, and important details from this material.</p>}{summaryError && <div className="mt-4"><ErrorNotice>{summaryError}</ErrorNotice></div>}</div></div> : <div className="border-t border-slate-100 px-5 py-4 text-sm text-slate-500">Files are ready to download. AI study tools need readable text; add notes or a transcript, or use a text-based document. Scanned PDFs and images need OCR support.</div>}
                 </> : <div className="p-6"><ErrorNotice>{aiError || 'Could not open this material.'}</ErrorNotice></div>}
             </section>
 
             {detail?.ai_ready && <section className={cardClass + ' overflow-hidden'}>
-              <div className="flex items-start gap-3 border-b border-slate-100 p-5 sm:p-6"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-50 text-cyan-700"><MessageCircle className="h-5 w-5" /></div><div><h3 className="text-base font-bold text-slate-900">Ask your course copilot</h3><p className="mt-1 text-sm leading-5 text-slate-500">Questions are answered from this note, with matching excerpts you can check.</p></div></div>
+              <div className="flex items-start gap-3 border-b border-slate-100 p-5 sm:p-6"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-50 text-cyan-700"><MessageCircle className="h-5 w-5" /></div><div><h3 className="text-base font-bold text-slate-900">Gemini course chat</h3><p className="mt-1 text-sm leading-5 text-slate-500">Ask Gemini about these notes. Answers include matching excerpts you can check.</p></div></div>
               <div className="p-5 sm:p-6">
-                <form onSubmit={askQuestion} className="flex flex-col gap-2 sm:flex-row"><label htmlFor="course-question" className="sr-only">Ask a question about this material</label><input id="course-question" value={question} onChange={(event) => setQuestion(event.target.value)} minLength={3} maxLength={2000} placeholder="For example: What are the main steps in this process?" className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100" /><button type="submit" disabled={answerLoading || question.trim().length < 3 || aiStatus?.configured === false || (aiStatus?.requests_used_today >= aiStatus?.daily_request_limit)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">{answerLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}{answerLoading ? 'Thinking…' : 'Ask question'}</button></form>
+                <form onSubmit={askQuestion} className="flex flex-col gap-2 sm:flex-row"><label htmlFor="course-question" className="sr-only">Ask Gemini about this material</label><input id="course-question" value={question} onChange={(event) => setQuestion(event.target.value)} minLength={3} maxLength={2000} placeholder="Ask a question about these notes…" className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100" /><button type="submit" disabled={answerLoading || question.trim().length < 3 || (!summary || !isSummaryOverviewQuestion(question)) && (aiStatus?.configured === false || aiStatus?.requests_used_today >= aiStatus?.daily_request_limit)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">{answerLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}{answerLoading ? 'Gemini is replying…' : 'Ask Gemini'}</button></form>
                 {aiError && <div className="mt-4"><ErrorNotice>{aiError}</ErrorNotice></div>}
-                {answer && <div className="mt-5 rounded-2xl border border-cyan-200 bg-cyan-50/50 p-4 sm:p-5"><div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-cyan-800"><Sparkles className="h-4 w-4" /> {answer.abstained ? 'No supported answer found' : 'Grounded answer'}</div><p className="whitespace-pre-wrap text-sm leading-7 text-slate-800">{answer.answer}</p>{answer.citations?.length > 0 && <div className="mt-4 border-t border-cyan-200 pt-4"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">Check the source</p><ul className="mt-2 space-y-2">{answer.citations.map((citation) => <li key={citation.passage_id + citation.quote} className="rounded-xl border border-white bg-white/90 p-3 text-sm leading-6 text-slate-700"><span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-cyan-800">{citation.passage_id}</span>“{citation.quote}”</li>)}</ul></div>}</div>}
+                {answer && <div className="mt-5 rounded-2xl border border-cyan-200 bg-cyan-50/50 p-4 sm:p-5"><div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-cyan-800"><Sparkles className="h-4 w-4" /> {answer.abstained ? 'No supported answer found' : answer.fromSummary ? 'From Gemini study summary' : 'Grounded answer'}</div>{answer.fromSummary ? <div className="text-sm leading-7 text-slate-800"><React.Suspense fallback={<p>Formatting answer…</p>}><MarkdownSummary content={answer.answer} /></React.Suspense></div> : <p className="whitespace-pre-wrap text-sm leading-7 text-slate-800">{answer.answer}</p>}{answer.citations?.length > 0 && <div className="mt-4 border-t border-cyan-200 pt-4"><p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">Check the source</p><ul className="mt-2 space-y-2">{answer.citations.map((citation) => <li key={citation.passage_id + citation.quote} className="rounded-xl border border-white bg-white/90 p-3 text-sm leading-6 text-slate-700"><span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-cyan-800">{citation.passage_id}</span>“{citation.quote}”</li>)}</ul></div>}</div>}
               </div>
             </section>}
           </>}
@@ -347,4 +406,8 @@ export default function CourseMaterials({ mode, showToast }) {
       </div>
     </section>
   );
+}
+
+export default function CourseMaterials(props) {
+  return <CourseMaterialsErrorBoundary><CourseMaterialsView {...props} /></CourseMaterialsErrorBoundary>;
 }

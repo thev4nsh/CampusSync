@@ -369,7 +369,7 @@ export const learningApi = {
     }
     return response.blob();
   },
-  summarize: async (materialId) => await request('/api/ai/materials/' + encodeURIComponent(materialId) + '/summary', { method: 'POST' }),
+  summarize: async (materialId, forceRefresh = false) => await request('/api/ai/materials/' + encodeURIComponent(materialId) + '/summary', { method: 'POST', params: { force_refresh: forceRefresh || undefined } }),
   ask: async (materialId, question) => await request('/api/ai/materials/' + encodeURIComponent(materialId) + '/questions', { method: 'POST', body: { question } }),
 };
 

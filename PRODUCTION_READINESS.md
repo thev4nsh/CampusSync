@@ -13,7 +13,7 @@ CampusSync is a local single-college application under active development. It is
 - Student and teacher accounts no longer receive preset passwords. Initial passwords require at least 12 characters and are not silently truncated before hashing.
 - Admin password changes revoke the user's existing sessions.
 - Business records now carry an institution ID. Authenticated ORM reads and bulk updates/deletes are filtered by the logged-in institution, new records inherit that scope, and cross-institution foreign-key links are rejected.
-- Course AI uses server-side provider credentials, daily per-user limits, bounded output, non-stored Responses, course permissions, and verified citations. Biometric data must never be sent to the provider.
+- Course AI uses server-side Gemini credentials, daily per-user limits, bounded output, course permissions, and verified citations. Biometric data must never be sent to the provider. Review Google's current data-use terms and institution policy before sending course materials, especially when using the free tier.
 
 ## Release gates before real student data
 
