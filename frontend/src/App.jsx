@@ -76,6 +76,18 @@ export default function App() {
     return () => unsubscribe();
   }, [showToast]);
 
+  // Keep browser Back inside the portal and let each role return to its dashboard.
+  useEffect(() => {
+    if (isInitializing || role === 'login') return undefined;
+    const stayInPortal = () => {
+      window.history.pushState({ campusSyncPortal: true }, '', window.location.href);
+      window.dispatchEvent(new Event('campussync:back'));
+    };
+    window.history.pushState({ campusSyncPortal: true }, '', window.location.href);
+    window.addEventListener('popstate', stayInPortal);
+    return () => window.removeEventListener('popstate', stayInPortal);
+  }, [isInitializing, role]);
+
   // Login handler
   const handleLoginSuccess = (user, userRole) => {
     const normalizedRole = (userRole || user?.role || 'student').toLowerCase();

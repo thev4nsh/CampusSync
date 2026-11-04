@@ -26,13 +26,26 @@ import {
   Phone,
   Mail,
   Building,
-  GraduationCap
+  GraduationCap,
+  Sparkles,
+  Bell,
+  ArrowLeft
 } from 'lucide-react';
-import { studentApi, ApiError } from './api';
+import { studentApi, announcementApi, ApiError } from './api';
+import CourseMaterials from './CourseMaterials';
+import Announcements from './Announcements';
+import Classrooms from './Classrooms';
 
 export default function Student({ currentUser, onLogout, showToast, institutionInfo }) {
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'attendance' | 'history' | 'profile'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'materials' | 'attendance' | 'history' | 'profile'
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [activeAlertCount, setActiveAlertCount] = useState(0);
+
+  useEffect(() => {
+    const handleAppBack = () => setActiveTab('dashboard');
+    window.addEventListener('campussync:back', handleAppBack);
+    return () => window.removeEventListener('campussync:back', handleAppBack);
+  }, []);
 
   // ================= DASHBOARD STATE =================
   const [dashboardData, setDashboardData] = useState(null);
@@ -101,6 +114,37 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
       setProfileLoading(false);
     }
   }, []);
+
+  // Poll for urgent class notices while the student portal is open.
+  useEffect(() => {
+    let active = true;
+    let initialized = false;
+    const storageKey = 'campussync_seen_alerts_' + (currentUser?.id || 'student');
+    let seen = new Set();
+    try { seen = new Set(JSON.parse(sessionStorage.getItem(storageKey) || '[]')); } catch { seen = new Set(); }
+
+    const checkAlerts = async () => {
+      try {
+        const rows = await announcementApi.list();
+        if (!active) return;
+        const alerts = (Array.isArray(rows) ? rows : []).filter((item) => item.is_alert || item.priority === 'urgent');
+        setActiveAlertCount(alerts.length);
+        const fresh = alerts.filter((item) => !seen.has(item.id));
+        if (initialized && fresh.length) {
+          showToast?.('New class alert: ' + fresh[0].title, 'warning');
+        }
+        fresh.forEach((item) => seen.add(item.id));
+        try { sessionStorage.setItem(storageKey, JSON.stringify(Array.from(seen))); } catch { /* Session storage is optional. */ }
+        initialized = true;
+      } catch {
+        // The main portal remains usable if announcements are temporarily unavailable.
+      }
+    };
+
+    checkAlerts();
+    const timer = window.setInterval(checkAlerts, 30000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [currentUser?.id, showToast]);
 
   // Lifecycle fetches
   useEffect(() => {
@@ -226,6 +270,31 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
           </button>
 
           <button
+            onClick={() => { setActiveTab('classrooms'); setMobileMenuOpen(false); }}
+            className={'w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ' + (activeTab === 'classrooms' ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 font-semibold' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200')}
+          >
+            <Layers className="w-4 h-4" />
+            My Classroom
+          </button>
+
+          <button
+            onClick={() => { setActiveTab('materials'); setMobileMenuOpen(false); }}
+            className={'w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ' + (activeTab === 'materials' ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 font-semibold' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200')}
+          >
+            <Sparkles className="w-4 h-4" />
+            AI Study Materials
+          </button>
+
+          <button
+            onClick={() => { setActiveTab('announcements'); setMobileMenuOpen(false); }}
+            className={'w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ' + (activeTab === 'announcements' ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 font-semibold' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200')}
+          >
+            <Bell className="w-4 h-4" />
+            Announcements
+            {activeAlertCount > 0 && <span className="ml-auto rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-bold leading-none text-white">{activeAlertCount}</span>}
+          </button>
+
+          <button
             onClick={() => { setActiveTab('attendance'); setMobileMenuOpen(false); }}
             className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
               activeTab === 'attendance'
@@ -286,8 +355,12 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
             >
               <Menu className="w-5 h-5" />
             </button>
+            {activeTab !== 'dashboard' && <button type="button" onClick={() => setActiveTab('dashboard')} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50" aria-label="Back to dashboard"><ArrowLeft className="h-4 w-4" /><span className="hidden sm:inline">Back</span></button>}
             <h1 className="text-lg font-bold text-slate-900 capitalize">
               {activeTab === 'dashboard' && 'Student Attendance Dashboard'}
+              {activeTab === 'classrooms' && 'My Classroom'}
+              {activeTab === 'materials' && 'AI Course Materials'}
+              {activeTab === 'announcements' && 'Class Announcements'}
               {activeTab === 'attendance' && 'My Attendance Summary'}
               {activeTab === 'history' && 'Attendance Log History'}
               {activeTab === 'profile' && 'Student Profile & Biometric Status'}
@@ -315,6 +388,10 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
 
         {/* Scrollable View Content */}
         <main className="flex-1 overflow-y-auto p-4 lg:p-8 space-y-6">
+
+          {activeTab === 'materials' && <CourseMaterials mode="student" showToast={showToast} />}
+          {activeTab === 'announcements' && <Announcements mode="student" showToast={showToast} />}
+          {activeTab === 'classrooms' && <Classrooms mode="student" onOpenAnnouncements={() => setActiveTab('announcements')} onOpenCoursework={() => setActiveTab('materials')} />}
 
           {/* ================= DASHBOARD VIEW ================= */}
           {activeTab === 'dashboard' && (

@@ -5,9 +5,11 @@ from sqlalchemy import func
 from app.database import get_db
 from app.models import (
     Student,
+    Class,
     AttendanceRecord,
     AttendanceSession,
     Subject,
+    TeacherSubjectAssignment,
     AttendanceStatus
 )
 from app.schemas import (
@@ -15,11 +17,36 @@ from app.schemas import (
     StudentDashboardResponse,
     AttendanceRecordResponse,
     SubjectBreakdownItem,
-    BiometricsStatus
+    BiometricsStatus,
+    StudentClassroomResponse,
 )
 from app.dependencies import get_current_student
 
 router = APIRouter(prefix="/students", tags=["Students"])
+
+
+@router.get("/classrooms", response_model=List[StudentClassroomResponse])
+def get_student_classrooms(
+    student: Student = Depends(get_current_student),
+    db: Session = Depends(get_db),
+):
+    """Return the student's active class home and the subjects currently taught to it."""
+    if not student.class_id:
+        return []
+    class_obj = db.query(Class).filter(Class.id == student.class_id).first()
+    if not class_obj:
+        return []
+    subjects = db.query(Subject).join(TeacherSubjectAssignment).filter(
+        TeacherSubjectAssignment.class_id == class_obj.id
+    ).distinct().order_by(Subject.name).all()
+    return [StudentClassroomResponse(
+        id=class_obj.id,
+        name=class_obj.name,
+        year=class_obj.year,
+        section=class_obj.section,
+        department=class_obj.department,
+        subjects=subjects,
+    )]
 
 
 @router.get("/me", response_model=StudentResponse)

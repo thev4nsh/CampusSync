@@ -10,12 +10,14 @@ import sys
 import argparse
 from sqlalchemy.orm import Session
 from app.database import SessionLocal, engine, Base
-from app.models import User, UserRole, Class, Subject, Teacher, Student, RFIDCard, BiometricIdentity, Device, DeviceType, SystemSetting
+from app.models import Institution, User, UserRole, Class, Subject, Teacher, Student, RFIDCard, BiometricIdentity, Device, DeviceType, SystemSetting
 from app.security import get_password_hash
 
 
-def seed_admin(db: Session, email: str = "admin@campussync.edu", password: str = "Admin@123"):
+def seed_admin(db: Session, email: str, password: str):
     """Create master institutional administrator account if not present."""
+    if len(password) < 12 or len(password.encode("utf-8")) > 72:
+        raise ValueError("Admin password must be 12-72 characters and at most 72 UTF-8 bytes.")
     existing = db.query(User).filter(User.email.ilike(email)).first()
     if existing:
         print(f"[INFO] Admin user '{email}' already exists.")
@@ -87,7 +89,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CampusSync Database Seeder")
     parser.add_argument("--init-admin", action="store_true", help="Create default admin account")
     parser.add_argument("--admin-email", default="admin@campussync.edu", help="Admin email")
-    parser.add_argument("--admin-password", default="Admin@123", help="Admin password")
+    parser.add_argument("--admin-password", required=True, help="Initial admin password (12+ characters)")
     parser.add_argument("--init-all", action="store_true", help="Seed admin + academic structure")
 
     args = parser.parse_args()
@@ -97,6 +99,12 @@ if __name__ == "__main__":
     db = SessionLocal()
 
     try:
+        institution = db.query(Institution).filter(Institution.id == 1).first()
+        if not institution:
+            institution = Institution(id=1, name="CampusSync University", slug="campus")
+            db.add(institution)
+            db.commit()
+        db.info["institution_id"] = institution.id
         if args.init_all:
             seed_admin(db, args.admin_email, args.admin_password)
             seed_sample_academic(db)

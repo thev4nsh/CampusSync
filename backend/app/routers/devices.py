@@ -5,8 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Device, DeviceType
-from app.schemas import DeviceCreate, DeviceUpdate, DeviceResponse, DeviceStatusUpdate
+from app.schemas import DeviceCreate, DeviceUpdate, DeviceResponse, DeviceCredentialResponse, DeviceStatusUpdate
 from app.dependencies import require_admin, get_current_active_user
+from app.device_security import generate_device_key, hash_device_key
 
 router = APIRouter(prefix="/devices", tags=["Devices"])
 
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/devices", tags=["Devices"])
 @router.get("", response_model=List[DeviceResponse])
 @router.get("/", response_model=List[DeviceResponse])
 def list_devices(
-    current_user = Depends(get_current_active_user),
+    current_user = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
     """List all registered hardware device terminals with online/offline telemetry."""
@@ -81,9 +82,29 @@ def register_device(
     )
 
 
+@router.post("/{device_id}/credential", response_model=DeviceCredentialResponse)
+def rotate_device_credential(
+    device_id: str,
+    current_user = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Create or rotate a device key. The plaintext key is returned exactly once."""
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found.")
+    if not device.is_active:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Activate the device before provisioning credentials.")
+
+    api_key = generate_device_key()
+    device.api_key_hash = hash_device_key(api_key)
+    db.commit()
+    return DeviceCredentialResponse(device_id=device.id, api_key=api_key)
+
+
 @router.get("/{device_id}", response_model=DeviceResponse)
 def get_device(
     device_id: str,
+    current_user = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
     """Get single device terminal telemetry."""
@@ -118,11 +139,46 @@ def update_device_status(
 
     is_online = payload.status.lower() == "online"
     device.is_active = is_online
+    if not is_online:
+        device.api_key_hash = None
     if is_online:
         device.last_seen = datetime.now(timezone.utc)
     db.commit()
 
     return {"message": f"Device status updated to {payload.status}", "id": device.id, "status": payload.status}
+
+
+@router.put("/{device_id}", response_model=DeviceResponse)
+def update_device(
+    device_id: str,
+    payload: DeviceUpdate,
+    current_user = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found.")
+    for field in ("name", "location", "ip_address"):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(device, field, value)
+    if payload.is_active is not None:
+        device.is_active = payload.is_active
+        if not payload.is_active:
+            device.api_key_hash = None
+    db.commit()
+    db.refresh(device)
+    return DeviceResponse(
+        id=device.id,
+        name=device.name,
+        type=device.type,
+        location=device.location,
+        ip_address=device.ip_address,
+        is_active=device.is_active,
+        status="Online" if device.is_active else "Offline",
+        last_seen=device.last_seen,
+        created_at=device.created_at,
+    )
 
 
 @router.delete("/{device_id}")

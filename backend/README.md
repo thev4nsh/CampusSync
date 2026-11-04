@@ -124,8 +124,16 @@ DATABASE_URL=postgresql://postgres:YourPassword@localhost:5432/campus_sync
 # JWT Signing Secret & Expiration
 JWT_SECRET_KEY=generate_a_secure_256bit_hex_secret_here
 JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
+ACCESS_TOKEN_EXPIRE_MINUTES=15
 REFRESH_TOKEN_EXPIRE_DAYS=7
+
+# OpenAI course-material summaries and grounded Q&A
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-6-luna
+OPENAI_SUMMARY_MAX_OUTPUT_TOKENS=1200
+OPENAI_ANSWER_MAX_OUTPUT_TOKENS=900
+AI_DAILY_LIMIT_STUDENT=25
+AI_DAILY_LIMIT_STAFF=100
 
 # Application Settings
 ENVIRONMENT=development
@@ -144,11 +152,9 @@ ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 # Apply initial schema migration to PostgreSQL
 alembic upgrade head
 
-# (Optional) Seed the initial master administrator account & sample classes:
-python seed.py --init-all
-# Default credentials created:
-# Email: admin@campussync.edu
-# Password: Admin@123
+# (Optional) Create a first administrator and sample academic structure.
+# Use your own strong password; the script has no default password.
+python seed.py --init-all --admin-email admin@campussync.edu --admin-password "Choose-A-Unique-Password-12+"
 ```
 
 ---
@@ -196,4 +202,9 @@ All attendance channels (RFID, Fingerprint, Face Recognition, Manual) pass throu
 * **JWT Expiration:** Short-lived access tokens with secure refresh token rotation.
 * **No Biometric Images Stored:** Fingerprint template indices and face embedding reference IDs stored only; raw biometrics are never saved.
 * **CORS Whitelisting:** Restricted to configured frontend domains.
-* **Database Isolation:** Database port `5432` is kept internal; external access is strictly via FastAPI REST endpoints.
+* **Institution Isolation:** Authenticated ORM queries and writes are scoped to the user's college; existing records are assigned to the first CampusSync institution by migration.
+* **AI Data Handling:** Only readable course material is sent to the OpenAI API. Calls disable stored Responses, exclude grades and biometric data, enforce daily request caps, and verify returned source quotes before displaying answers.
+
+### AI Course Study Tools
+
+Teachers can post text notes or upload readable PDF, Office, text, SRT, and VTT files to an assigned class. A YouTube lecture link can be attached with a teacher-provided caption/transcript file; arbitrary YouTube caption scraping is not used. Students in that class can request a cached summary or ask a question; the backend retrieves relevant passages and returns exact matching source excerpts. Scanned PDFs and image-only files need OCR before they can be used for AI. Store the API key only in `backend/.env` or a deployment secret, never in a `VITE_` variable. Check `GET /api/ai/status` while signed in to verify configuration and daily usage.

@@ -19,7 +19,8 @@ from app.models import (
     Device,
     RFIDCard,
     BiometricIdentity,
-    SystemSetting
+    SystemSetting,
+    AuthSession,
 )
 from app.schemas import (
     AdminDashboardResponse,
@@ -164,12 +165,14 @@ def create_student(
         cls = db.query(Class).filter(Class.name.ilike(payload.class_name.strip())).first()
         if cls:
             target_class_id = cls.id
+    if target_class_id and not db.query(Class.id).filter(Class.id == target_class_id).first():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found in this institution.")
 
     # 2. Create User Record
     user = User(
         name=payload.name.strip(),
         email=payload.email.strip().lower(),
-        hashed_password=get_password_hash(payload.password or "Student@123"),
+        hashed_password=get_password_hash(payload.password),
         role=UserRole.STUDENT,
         is_active=True
     )
@@ -249,8 +252,12 @@ def update_student(
     if payload.name:
         user.name = payload.name.strip()
 
-    if payload.password and len(payload.password.strip()) > 0:
-        user.hashed_password = get_password_hash(payload.password.strip())
+    if payload.password:
+        user.hashed_password = get_password_hash(payload.password)
+        db.query(AuthSession).filter(
+            AuthSession.user_id == user.id,
+            AuthSession.revoked_at.is_(None),
+        ).update({AuthSession.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
 
     if payload.department:
         student.department = payload.department
@@ -264,6 +271,8 @@ def update_student(
         student.phone = payload.phone
 
     if payload.class_id:
+        if not db.query(Class.id).filter(Class.id == payload.class_id).first():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found in this institution.")
         student.class_id = payload.class_id
     elif payload.class_name:
         cls = db.query(Class).filter(Class.name.ilike(payload.class_name.strip())).first()
@@ -434,7 +443,7 @@ def create_teacher(
     user = User(
         name=payload.name.strip(),
         email=payload.email.strip().lower(),
-        hashed_password=get_password_hash(payload.password or "Teacher@123"),
+        hashed_password=get_password_hash(payload.password),
         role=UserRole.TEACHER,
         is_active=True
     )
@@ -499,8 +508,12 @@ def update_teacher(
     if payload.name:
         user.name = payload.name.strip()
 
-    if payload.password and len(payload.password.strip()) > 0:
-        user.hashed_password = get_password_hash(payload.password.strip())
+    if payload.password:
+        user.hashed_password = get_password_hash(payload.password)
+        db.query(AuthSession).filter(
+            AuthSession.user_id == user.id,
+            AuthSession.revoked_at.is_(None),
+        ).update({AuthSession.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
 
     if payload.department:
         teacher.department = payload.department

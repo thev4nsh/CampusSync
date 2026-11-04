@@ -48,3 +48,7 @@ htmlcov/
 .idea/
 *.swp
 *.swo
+
+# Private local announcement attachments
+uploads/announcements/
+uploads/course_materials/

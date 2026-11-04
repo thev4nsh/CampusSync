@@ -1,7 +1,7 @@
 # CampusSync — Smart Multi-Modal Attendance & Campus Management System
 
 > **B.Tech Computer Science & Engineering (3rd Year Major Project)**  
-> Production-ready, enterprise-grade architecture for institutional attendance automation, multi-modal biometric device network integration, and campus management.
+> CampusSync is under active development. It is a single-college prototype with student, teacher, and admin workflows; it is not yet approved for production use.
 
 ---
 
@@ -9,7 +9,7 @@
 
 **CampusSync** is an institutional campus attendance and administration management system designed to eliminate proxy attendance, streamline faculty administration, and provide verifiable audit logs.
 
-The platform transforms legacy paper attendance into an automated, multi-modal terminal network supporting **RFID Smart Cards (13.56 MHz)**, **Optical/Capacitive Fingerprint Sensors**, and **Edge AI Face Recognition Streams** linked to a centralized **FastAPI** backend and **PostgreSQL** database.
+The platform is being built around a **FastAPI** backend and **PostgreSQL** database. Attendance ingestion supports authenticated RFID, fingerprint, and face-edge device submissions. Recognition hardware/model, biometric consent, retention, and institutional isolation still need deployment-specific implementation and review.
 
 ```text
   Web Portals (Student / Teacher / Admin)
@@ -85,9 +85,9 @@ CampusSync/
 
 ### 2. FastAPI Backend & PostgreSQL Storage
 * **Relational Schema:** Models for `users`, `students`, `teachers`, `classes`, `subjects`, `teacher_subject_assignments`, `attendance_sessions`, `attendance_records`, `devices`, `rfid_cards`, `biometric_identities`, and `system_settings`.
-* **Alembic Migrations:** Production database migrations (`0001_initial_schema.py`).
+* **Alembic Migrations:** Versioned database changes in `backend/alembic/versions/`.
 * **Central Attendance Service:** Unified 8-step pipeline with application and database-level duplicate prevention (`UniqueConstraint("student_id", "session_id")`).
-* **Automated Tests:** 12 unit and integration tests covering auth, RBAC, session lifecycles, and duplicate prevention.
+* **Automated Tests:** Pytest suite covering authentication, RBAC, attendance, and device credentials.
 
 ---
 
@@ -99,7 +99,7 @@ CampusSync/
 * **Notices & Bulletins:** Targeted department broadcasts with push notifications.
 * **Examination Results:** Semester grades and transcript generation.
 * **Leave Management:** Digital student and faculty leave approval workflows.
-* **AI Campus Assistant:** Retrieval-Augmented Generation (RAG) assistant for college queries.
+* **Campus-Wide AI Assistant:** Retrieval across approved college policies and student-specific services, with tenant and role checks.
 
 ---
 

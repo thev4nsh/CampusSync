@@ -3,7 +3,7 @@ import re
 from typing import List
 
 from fastapi import HTTPException, status
-from openai import APIError, OpenAI
+from openai import APIError, AuthenticationError, OpenAI, RateLimitError
 from pydantic import BaseModel
 
 from app.config import settings
@@ -21,12 +21,16 @@ class GroundedAnswerOutput(BaseModel):
 
 
 def _client() -> OpenAI:
+    ensure_ai_configured()
+    return OpenAI(api_key=settings.OPENAI_API_KEY, timeout=45.0, max_retries=1)
+
+
+def ensure_ai_configured() -> None:
     if not settings.OPENAI_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI features are not configured. Set OPENAI_API_KEY on the backend.",
         )
-    return OpenAI(api_key=settings.OPENAI_API_KEY, timeout=45.0, max_retries=1)
 
 
 def summarize_material(content: str) -> str:
@@ -45,14 +49,26 @@ def summarize_material(content: str) -> str:
                 },
                 {"role": "user", "content": content},
             ],
+            max_output_tokens=settings.OPENAI_SUMMARY_MAX_OUTPUT_TOKENS,
+            store=False,
         )
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI provider credentials are invalid or expired. Contact your campus administrator.",
+        ) from exc
+    except RateLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="The AI provider is temporarily at its request or usage limit. Try again later.",
+        ) from exc
     except APIError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The AI provider could not generate a summary right now.",
         ) from exc
 
-    summary = response.output_text.strip()
+    summary = (response.output_text or "").strip()
     if not summary:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -129,7 +145,19 @@ def answer_from_material(content: str, question: str) -> tuple[str, list[dict[st
                 },
             ],
             text_format=GroundedAnswerOutput,
+            max_output_tokens=settings.OPENAI_ANSWER_MAX_OUTPUT_TOKENS,
+            store=False,
         )
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI provider credentials are invalid or expired. Contact your campus administrator.",
+        ) from exc
+    except RateLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="The AI provider is temporarily at its request or usage limit. Try again later.",
+        ) from exc
     except APIError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -142,12 +170,18 @@ def answer_from_material(content: str, question: str) -> tuple[str, list[dict[st
 
     by_id = {passage["passage_id"]: passage["text"] for passage in selected}
     citations = []
+    invalid_citation = False
     for citation in parsed.citations:
         source = by_id.get(citation.passage_id)
         quote = citation.quote.strip()
         if source and quote and quote.casefold() in source.casefold():
             citations.append({"passage_id": citation.passage_id, "quote": quote})
+        else:
+            invalid_citation = True
 
-    if parsed.abstained or not citations:
-        return parsed.answer.strip() or "I couldn't find a supported answer in these notes.", [], True
-    return parsed.answer.strip(), citations, False
+    answer = parsed.answer.strip()
+    if parsed.abstained:
+        return answer or "I couldn't find a supported answer in these notes.", [], True
+    if invalid_citation or not citations or not answer:
+        return "I couldn't find a supported answer in these notes.", [], True
+    return answer, citations, False

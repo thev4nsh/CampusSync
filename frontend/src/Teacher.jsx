@@ -31,9 +31,15 @@ import {
   StopCircle,
   Calendar,
   Layers,
-  Loader2
+  Loader2,
+  Sparkles,
+  Bell,
+  ArrowLeft
 } from 'lucide-react';
-import { teacherApi, ApiError } from './api';
+import { teacherApi, announcementApi, ApiError } from './api';
+import CourseMaterials from './CourseMaterials';
+import Announcements from './Announcements';
+import Classrooms from './Classrooms';
 
 export default function Teacher({ currentUser, onLogout, showToast, institutionInfo }) {
   const [activeTab, setActiveTab] = useState('take-attendance');
@@ -43,6 +49,9 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
   const [dashboardData, setDashboardData] = useState(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const [dashboardError, setDashboardError] = useState(null);
+  const [myAnnouncements, setMyAnnouncements] = useState([]);
+  const [myAnnouncementsError, setMyAnnouncementsError] = useState('');
+  const [announcementPosterUrls, setAnnouncementPosterUrls] = useState({});
 
   // ================= CLASSES & SUBJECTS STATE =================
   const [classesList, setClassesList] = useState([]);
@@ -193,6 +202,44 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
       setDashboardLoading(false);
     }
   }, []);
+
+  const loadMyAnnouncements = useCallback(async () => {
+    setMyAnnouncementsError('');
+    try {
+      const rows = await announcementApi.listMine();
+      setMyAnnouncements(Array.isArray(rows) ? rows : []);
+    } catch (err) {
+      setMyAnnouncementsError(err.message || 'Could not load your sent announcements.');
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleAppBack = () => setActiveTab('dashboard');
+    window.addEventListener('campussync:back', handleAppBack);
+    return () => window.removeEventListener('campussync:back', handleAppBack);
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'dashboard') loadMyAnnouncements();
+  }, [activeTab, loadMyAnnouncements]);
+
+  useEffect(() => {
+    let active = true;
+    const urls = [];
+    setAnnouncementPosterUrls({});
+    myAnnouncements.filter((item) => item.has_poster).forEach((item) => {
+      announcementApi.getAttachmentBlob(item.id, 'poster').then((blob) => {
+        const objectUrl = URL.createObjectURL(blob);
+        urls.push(objectUrl);
+        if (active) setAnnouncementPosterUrls((current) => ({ ...current, [item.id]: objectUrl }));
+        else URL.revokeObjectURL(objectUrl);
+      }).catch(() => {});
+    });
+    return () => {
+      active = false;
+      urls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [myAnnouncements]);
 
   // ================= LOAD ATTENDANCE RECORDS =================
   const loadRecords = useCallback(async () => {
@@ -438,6 +485,10 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
 
   const displayName = profileData?.name || currentUser?.name || 'Faculty Member';
   const displayDept = profileData?.department || currentUser?.department || 'Department of Computer Science';
+  const upcomingTeacherEvents = myAnnouncements
+    .filter((item) => item.event_date && item.event_date >= new Date().toISOString().slice(0, 10))
+    .sort((a, b) => a.event_date.localeCompare(b.event_date))
+    .slice(0, 5);
 
   return (
     <div className="flex h-screen bg-slate-100 overflow-hidden font-sans">
@@ -502,6 +553,14 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
           </button>
 
           <button
+            onClick={() => { setActiveTab('classrooms'); setMobileMenuOpen(false); }}
+            className={'w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ' + (activeTab === 'classrooms' ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 font-semibold' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200')}
+          >
+            <Layers className="w-4 h-4" />
+            My Classrooms
+          </button>
+
+          <button
             onClick={() => { setActiveTab('take-attendance'); setMobileMenuOpen(false); }}
             className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
               activeTab === 'take-attendance'
@@ -535,6 +594,22 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
           >
             <Users className="w-4 h-4 text-sky-400" />
             Student Roster
+          </button>
+
+          <button
+            onClick={() => { setActiveTab('materials'); setMobileMenuOpen(false); }}
+            className={'w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ' + (activeTab === 'materials' ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 font-semibold' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200')}
+          >
+            <Sparkles className="w-4 h-4" />
+            Course Materials
+          </button>
+
+          <button
+            onClick={() => { setActiveTab('announcements'); setMobileMenuOpen(false); }}
+            className={'w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ' + (activeTab === 'announcements' ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 font-semibold' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200')}
+          >
+            <Bell className="w-4 h-4" />
+            Announcements
           </button>
 
           <button
@@ -598,11 +673,15 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
             >
               <Menu className="w-5 h-5" />
             </button>
+            {activeTab !== 'dashboard' && <button type="button" onClick={() => setActiveTab('dashboard')} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50" aria-label="Back to dashboard"><ArrowLeft className="h-4 w-4" /><span className="hidden sm:inline">Back</span></button>}
             <h1 className="text-lg font-bold text-slate-900 capitalize">
               {activeTab === 'dashboard' && 'Faculty Attendance Dashboard'}
+              {activeTab === 'classrooms' && 'My Classrooms'}
               {activeTab === 'take-attendance' && 'Multi-Modal Attendance Terminal'}
               {activeTab === 'records' && 'Class Attendance Records'}
               {activeTab === 'classes' && 'Assigned Classes & Batches'}
+              {activeTab === 'materials' && 'Course Materials & AI Study Tools'}
+              {activeTab === 'announcements' && 'Class Announcements & Alerts'}
               {activeTab === 'reports' && 'Attendance Reports & Analytics'}
               {activeTab === 'profile' && 'Faculty Profile'}
             </h1>
@@ -630,6 +709,10 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
 
         {/* Scrollable View Content */}
         <main className="flex-1 overflow-y-auto p-4 lg:p-8 space-y-6">
+
+          {activeTab === 'materials' && <CourseMaterials mode="teacher" showToast={showToast} />}
+          {activeTab === 'announcements' && <Announcements mode="teacher" showToast={showToast} />}
+          {activeTab === 'classrooms' && <Classrooms mode="teacher" onOpenAnnouncements={() => setActiveTab('announcements')} onOpenCoursework={() => setActiveTab('materials')} />}
 
           {/* ================= TEACHER DASHBOARD ================= */}
           {activeTab === 'dashboard' && (
@@ -659,7 +742,7 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                         {dashboardData?.todays_classes !== undefined ? dashboardData.todays_classes : '—'}
                       </h3>
                     )}
-                    <p className="text-xs text-blue-600 font-medium mt-1">Scheduled sessions</p>
+                    <p className="text-xs text-blue-600 font-medium mt-1">Sessions you started today</p>
                   </div>
                   <div className="p-3 bg-blue-50 text-blue-600 rounded-2xl border border-blue-200 shrink-0">
                     <BookOpen className="w-6 h-6" />
@@ -694,7 +777,7 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                       </h3>
                     )}
                     <p className="text-xs text-emerald-600 font-medium mt-1">
-                      {dashboardData?.attendance_rate ? `${dashboardData.attendance_rate}% average` : 'Live synchronized'}
+                      {dashboardData?.attendance_rate !== undefined ? `${dashboardData.attendance_rate}% of recorded students` : 'Live synchronized'}
                     </p>
                   </div>
                   <div className="p-3 bg-emerald-50 text-emerald-600 rounded-2xl border border-emerald-200 shrink-0">
@@ -718,6 +801,25 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                     <XCircle className="w-6 h-6" />
                   </div>
                 </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                  <div><h3 className="text-base font-bold text-slate-900">Today’s attendance by class</h3><p className="mt-1 text-xs text-slate-500">These totals only include sessions you started today.</p></div>
+                  <button type="button" onClick={() => setActiveTab('records')} className="mt-2 text-left text-xs font-semibold text-blue-700 hover:underline sm:mt-0">Open attendance records</button>
+                </div>
+                {dashboardLoading ? <div className="mt-4 h-12 animate-pulse rounded-xl bg-slate-100" /> : dashboardData?.attendance_by_class?.length ? <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{dashboardData.attendance_by_class.map((row) => <div key={row.class_id} className="rounded-xl border border-slate-200 bg-slate-50 p-4"><p className="font-bold text-slate-800">{row.class_name}</p><p className="mt-2 text-xs text-slate-600"><span className="font-semibold text-emerald-700">{row.present} present</span><span className="mx-2 text-slate-300">·</span><span className="font-semibold text-rose-700">{row.absent} absent</span></p><p className="mt-1 text-[11px] text-slate-500">{row.recorded} attendance records</p></div>)}</div> : <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No attendance sessions you started have records today.</p>}
+              </div>
+
+              <div className="grid gap-5 xl:grid-cols-[0.85fr_1.15fr]">
+                <section className="rounded-2xl border border-violet-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between"><div><h3 className="text-base font-bold text-slate-900">Upcoming tests & events</h3><p className="mt-1 text-xs text-slate-500">Dates attached to your announcements</p></div><Calendar className="h-5 w-5 text-violet-600" /></div>
+                  {upcomingTeacherEvents.length ? <div className="mt-4 space-y-3">{upcomingTeacherEvents.map((item) => <div key={item.id} className="flex gap-3 rounded-xl bg-violet-50 p-3"><div className="min-w-16 rounded-lg bg-white px-2 py-1.5 text-center text-xs font-bold text-violet-700">{new Date(item.event_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-800">{item.title}</p><p className="mt-0.5 line-clamp-2 text-xs text-slate-600">{item.message}</p></div></div>)}</div> : <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No upcoming dates yet. Add a test or event date when publishing an announcement.</p>}
+                </section>
+                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between"><div><h3 className="text-base font-bold text-slate-900">Your sent announcements</h3><p className="mt-1 text-xs text-slate-500">Your latest notices and posters</p></div><button type="button" onClick={() => setActiveTab('announcements')} className="text-xs font-semibold text-blue-700 hover:underline">Open all</button></div>
+                  {myAnnouncementsError ? <p className="mt-4 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{myAnnouncementsError}</p> : myAnnouncements.length ? <div className="mt-4 space-y-3">{myAnnouncements.slice(0, 4).map((item) => <article key={item.id} className="flex gap-3 rounded-xl border border-slate-100 p-3">{item.has_poster && announcementPosterUrls[item.id] ? <img src={announcementPosterUrls[item.id]} alt={`${item.title} poster`} className="h-16 w-20 rounded-lg bg-slate-100 object-cover" /> : <div className="flex h-16 w-20 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600"><Bell className="h-5 w-5" /></div>}<div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-800">{item.title}</p><p className="mt-1 line-clamp-2 text-xs text-slate-600">{item.message}</p><p className="mt-1 text-[11px] text-slate-400">Sent {new Date(item.created_at).toLocaleDateString()}{item.event_date ? ` · Event ${new Date(item.event_date + 'T00:00:00').toLocaleDateString()}` : ''}</p></div></article>)}</div> : <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">You haven’t sent announcements yet. Notices and posters you publish will be saved here.</p>}
+                </section>
               </div>
 
               {/* Quick Actions & Schedule */}

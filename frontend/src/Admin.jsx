@@ -36,13 +36,20 @@ import {
   Mail,
   Sliders,
   AlertTriangle,
-  Download
+  Download,
+  ArrowLeft
 } from 'lucide-react';
 import { adminApi, ApiError } from './api';
 
 export default function Admin({ onLogout, showToast, institutionInfo, onInstitutionUpdated }) {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const handleAppBack = () => setActiveTab('dashboard');
+    window.addEventListener('campussync:back', handleAppBack);
+    return () => window.removeEventListener('campussync:back', handleAppBack);
+  }, []);
 
   // ================= DASHBOARD STATE =================
   const [dashboardData, setDashboardData] = useState(null);
@@ -319,7 +326,7 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
       name: '',
       class_name: classes[0]?.name || 'CSE-3A',
       email: '',
-      password: 'Student@123',
+      password: '',
       phone: '',
       department: 'Computer Science & Engineering',
       year: '3rd Year',
@@ -416,7 +423,7 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
       name: '',
       department: 'Computer Science & Engineering',
       email: '',
-      password: 'Teacher@123',
+      password: '',
       phone: '',
       subjects: '',
     });
@@ -889,6 +896,7 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
             >
               <Menu className="w-5 h-5" />
             </button>
+            {activeTab !== 'dashboard' && <button type="button" onClick={() => setActiveTab('dashboard')} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50" aria-label="Back to dashboard"><ArrowLeft className="h-4 w-4" /><span className="hidden sm:inline">Back</span></button>}
             <h1 className="text-lg font-bold text-slate-800 capitalize">
               {activeTab === 'dashboard' && 'Campus Administration Overview'}
               {activeTab === 'students' && 'Students Directory & Management'}
@@ -1922,12 +1930,15 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Default Password</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Initial Password</label>
                   <input
-                    type="text"
+                    type="password"
+                    required
+                    minLength={12}
+                    autoComplete="new-password"
                     value={studentFormData.password}
                     onChange={(e) => setStudentFormData({ ...studentFormData, password: e.target.value })}
-                    placeholder="Student@123"
+                    placeholder="At least 12 characters"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
                 </div>
@@ -2022,7 +2033,9 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Reset Password (Optional)</label>
                   <input
-                    type="text"
+                    type="password"
+                    minLength={12}
+                    autoComplete="new-password"
                     value={studentFormData.password}
                     onChange={(e) => setStudentFormData({ ...studentFormData, password: e.target.value })}
                     placeholder="Leave blank to keep unchanged"
@@ -2128,12 +2141,15 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Default Password</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Initial Password</label>
                   <input
-                    type="text"
+                    type="password"
+                    required
+                    minLength={12}
+                    autoComplete="new-password"
                     value={teacherFormData.password}
                     onChange={(e) => setTeacherFormData({ ...teacherFormData, password: e.target.value })}
-                    placeholder="Teacher@123"
+                    placeholder="At least 12 characters"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                 </div>
@@ -2252,7 +2268,9 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Reset Password (Optional)</label>
                   <input
-                    type="text"
+                    type="password"
+                    minLength={12}
+                    autoComplete="new-password"
                     value={teacherFormData.password}
                     onChange={(e) => setTeacherFormData({ ...teacherFormData, password: e.target.value })}
                     placeholder="Leave blank to keep unchanged"

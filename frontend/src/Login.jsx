@@ -213,7 +213,7 @@ export default function Login({ onLoginSuccess, institutionInfo }) {
 
               <button
                 type="button"
-                onClick={() => { setForgotModalOpen(true); setForgotError(''); }}
+                onClick={() => { setForgotModalOpen(true); setForgotError(''); setForgotSubmitted(true); }}
                 className="font-semibold text-blue-600 hover:text-blue-700 transition-colors"
               >
                 Forgot password?
@@ -328,10 +328,10 @@ export default function Login({ onLoginSuccess, institutionInfo }) {
                   <CheckCircle2 className="w-6 h-6" />
                 </div>
                 <h3 className="text-base font-bold text-slate-900 mb-1">
-                  Reset Instructions Dispatched
+                  Contact your administrator
                 </h3>
                 <p className="text-xs text-slate-600 mb-5 leading-relaxed">
-                  If an account matches <span className="font-semibold text-slate-800">{forgotInput}</span>, password reset instructions have been forwarded to your institutional email address.
+                  Self-service password reset is not configured yet. Contact your college administrator{institutionInfo?.support_email ? <> at <a className="font-semibold text-blue-700 hover:underline" href={`mailto:${institutionInfo.support_email}`}>{institutionInfo.support_email}</a></> : ''} to reset your password.
                 </p>
                 <button
                   onClick={closeForgotModal}

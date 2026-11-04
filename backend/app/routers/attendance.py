@@ -15,7 +15,9 @@ from app.models import (
     Teacher,
     Student,
     TeacherSubjectAssignment,
-    User
+    User,
+    Device,
+    DeviceType
 )
 from app.schemas import (
     AttendanceSessionCreate,
@@ -34,6 +36,7 @@ from app.dependencies import (
     require_teacher,
     require_admin
 )
+from app.dependencies import get_authenticated_device
 
 router = APIRouter(prefix="/attendance", tags=["Attendance"])
 
@@ -371,14 +374,15 @@ def submit_manual_attendance(
 @router.post("/rfid", response_model=AttendanceSubmissionResponse)
 def record_rfid_attendance(
     payload: RFIDAttendanceRequest,
+    device: Device = Depends(get_authenticated_device),
     db: Session = Depends(get_db)
 ):
     """
     Direct hardware ingestion endpoint for physical 13.56 MHz RFID readers (ESP32/RC522).
     Maps RFID Card UID -> Student -> Active Attendance Session.
     """
-    # 1. Update hardware terminal heartbeat
-    device_service.update_device_heartbeat(db, payload.device_id)
+    _verify_ingest_device(device, payload.device_id, DeviceType.RFID)
+    device_service.update_device_heartbeat(db, device.id)
 
     # 2. Resolve Student by Card UID
     student = device_service.resolve_student_by_rfid(db, payload.rfid_uid)
@@ -406,13 +410,15 @@ def record_rfid_attendance(
 @router.post("/fingerprint", response_model=AttendanceSubmissionResponse)
 def record_fingerprint_attendance(
     payload: FingerprintAttendanceRequest,
+    device: Device = Depends(get_authenticated_device),
     db: Session = Depends(get_db)
 ):
     """
     Direct hardware ingestion endpoint for physical biometric fingerprint terminals.
     Maps template index -> Student -> Active Attendance Session.
     """
-    device_service.update_device_heartbeat(db, payload.device_id)
+    _verify_ingest_device(device, payload.device_id, DeviceType.FINGERPRINT)
+    device_service.update_device_heartbeat(db, device.id)
     student = device_service.resolve_student_by_fingerprint(db, payload.template_id)
 
     record, msg = attendance_service.process_attendance(
@@ -437,13 +443,15 @@ def record_fingerprint_attendance(
 @router.post("/face", response_model=AttendanceSubmissionResponse)
 def record_face_attendance(
     payload: FaceAttendanceRequest,
+    device: Device = Depends(get_authenticated_device),
     db: Session = Depends(get_db)
 ):
     """
     Direct endpoint for edge AI Face Recognition services stream.
     Receives recognized Student ID and logs verified attendance.
     """
-    device_service.update_device_heartbeat(db, payload.device_id)
+    _verify_ingest_device(device, payload.device_id, DeviceType.FACE_CAMERA)
+    device_service.update_device_heartbeat(db, device.id)
 
     record, msg = attendance_service.process_attendance(
         db=db,
@@ -462,3 +470,11 @@ def record_face_attendance(
         status=record.status.value,
         method="FACE"
     )
+
+
+def _verify_ingest_device(device: Device, submitted_device_id: str, expected_type: DeviceType) -> None:
+    """Ensure the body cannot impersonate another device or attendance modality."""
+    if submitted_device_id != device.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device ID does not match authenticated device.")
+    if device.type != expected_type:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device type cannot submit this attendance method.")

@@ -25,7 +25,8 @@ from app.schemas import (
     SubjectResponse,
     StudentResponse,
     AttendanceRecordResponse,
-    ScheduleItem
+    ScheduleItem,
+    TeacherClassAttendance,
 )
 from app.dependencies import get_current_teacher
 
@@ -73,6 +74,34 @@ def get_teacher_dashboard(
     total_today = len(today_records)
     attendance_rate = round((present_today / total_today * 100), 1) if total_today > 0 else 0.0
 
+    class_ids_for_today = {session.class_id for session in today_sessions}
+    class_names = {
+        class_obj.id: class_obj.name
+        for class_obj in db.query(Class).filter(Class.id.in_(class_ids_for_today)).all()
+    } if class_ids_for_today else {}
+    counts_by_class = {
+        class_id: {"present": 0, "absent": 0, "recorded": 0}
+        for class_id in class_ids_for_today
+    }
+    session_class_ids = {session.id: session.class_id for session in today_sessions}
+    for record in today_records:
+        class_id = session_class_ids.get(record.session_id)
+        if class_id is None:
+            continue
+        counts_by_class[class_id]["recorded"] += 1
+        if record.status == AttendanceStatus.PRESENT:
+            counts_by_class[class_id]["present"] += 1
+        elif record.status == AttendanceStatus.ABSENT:
+            counts_by_class[class_id]["absent"] += 1
+    attendance_by_class = [
+        TeacherClassAttendance(
+            class_id=class_id,
+            class_name=class_names.get(class_id, f"Class {class_id}"),
+            **counts,
+        )
+        for class_id, counts in sorted(counts_by_class.items(), key=lambda pair: class_names.get(pair[0], ""))
+    ]
+
     # 3. Schedule breakdown
     schedule = []
     for a in teacher.subject_assignments:
@@ -91,7 +120,8 @@ def get_teacher_dashboard(
         "present_today": present_today,
         "absent_today": absent_today,
         "attendance_rate": attendance_rate,
-        "schedule": schedule
+        "schedule": schedule,
+        "attendance_by_class": attendance_by_class,
     }
 
 

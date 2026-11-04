@@ -6,7 +6,7 @@ def test_create_teacher_with_subjects_assignment(client, seed_data, admin_token)
         "id": "TCH999",
         "name": "Prof. Test Instructor",
         "email": "test.instructor@campussync.edu",
-        "password": "Teacher@123",
+        "password": "SecureTeacherPass2026!",
         "department": "Computer Science & Engineering",
         "phone": "+91 9998887776",
         "subjects": ["Compiler Design", "CSC502"]

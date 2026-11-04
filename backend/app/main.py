@@ -11,7 +11,8 @@ from app.routers import (
     attendance,
     devices,
     reports,
-    learning
+    learning,
+    announcements
 )
 
 # Instantiate the FastAPI Application
@@ -19,19 +20,18 @@ app = FastAPI(
     title="CampusSync API",
     description="Production-grade REST backend for Smart Multi-Modal Attendance & Campus Management System",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json"
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
 # Configure Cross-Origin Resource Sharing (CORS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
-    allow_origin_regex=r"^https?://.*$",
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "X-Device-ID", "X-Device-Key"],
 )
 
 
@@ -86,3 +86,5 @@ app.include_router(learning.materials_router, prefix=api_prefix)
 app.include_router(learning.ai_router, prefix=api_prefix)
 app.include_router(learning.materials_router)
 app.include_router(learning.ai_router)
+app.include_router(announcements.router, prefix=api_prefix)
+app.include_router(announcements.router)

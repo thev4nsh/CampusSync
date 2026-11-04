@@ -25,13 +25,15 @@ def test_rfid_attendance_marking_and_duplicate_prevention(client, seed_data, tea
     session_id = sess_res.json()["id"]
 
     # 2. Record first RFID scan
+    device_headers = {"X-Device-ID": "DEV-01", "X-Device-Key": seed_data["device_key"]}
     rfid_res = client.post(
         "/api/attendance/rfid",
         json={
             "device_id": "DEV-01",
             "rfid_uid": "RFID-TEST-001",
             "session_id": session_id
-        }
+        },
+        headers=device_headers
     )
     assert rfid_res.status_code == 200
     assert rfid_res.json()["success"] is True
@@ -45,7 +47,8 @@ def test_rfid_attendance_marking_and_duplicate_prevention(client, seed_data, tea
             "device_id": "DEV-01",
             "rfid_uid": "RFID-TEST-001",
             "session_id": session_id
-        }
+        },
+        headers=device_headers
     )
     assert dup_res.status_code == 409
     assert "already marked" in dup_res.json()["detail"].lower()
@@ -66,7 +69,8 @@ def test_student_dashboard_reflects_recorded_attendance(client, seed_data, teach
             "device_id": "DEV-01",
             "rfid_uid": "RFID-TEST-001",
             "session_id": session_id
-        }
+        },
+        headers={"X-Device-ID": "DEV-01", "X-Device-Key": seed_data["device_key"]}
     )
 
     # 2. Query student dashboard
@@ -80,6 +84,28 @@ def test_student_dashboard_reflects_recorded_attendance(client, seed_data, teach
     assert data["overall_attendance"] == 100.0
     assert len(data["recent_records"]) == 1
     assert data["recent_records"][0]["method"] == "RFID"
+
+
+def test_rfid_ingestion_requires_authenticated_matching_device(client, seed_data, teacher_token):
+    session = client.post(
+        "/api/attendance/sessions",
+        json={"class_id": 1, "subject_id": 1},
+        headers={"Authorization": f"Bearer {teacher_token}"},
+    ).json()
+    body = {"device_id": "DEV-01", "rfid_uid": "RFID-TEST-001", "session_id": session["id"]}
+
+    assert client.post("/api/attendance/rfid", json=body).status_code == 401
+    assert client.post("/api/attendance/rfid", json=body, headers={
+        "X-Device-ID": "DEV-01", "X-Device-Key": "wrong-key"
+    }).status_code == 401
+    assert client.post("/api/attendance/rfid", json=body, headers={
+        "X-Device-ID": "DEV-01", "X-Device-Key": seed_data["device_key"]
+    }).status_code == 200
+
+    mismatched_body = {**body, "device_id": "DEV-OTHER"}
+    assert client.post("/api/attendance/rfid", json=mismatched_body, headers={
+        "X-Device-ID": "DEV-01", "X-Device-Key": seed_data["device_key"]
+    }).status_code == 403
 
 
 def test_manual_attendance_marking(client, seed_data, teacher_token):

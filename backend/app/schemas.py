@@ -1,9 +1,16 @@
 from typing import List, Optional, Generic, TypeVar, Any, Union, Literal
-from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
+from datetime import date, datetime
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator, model_validator
 from app.models import UserRole, AttendanceMethod, AttendanceStatus, DeviceType, SessionStatus
+from app.services.course_file_service import normalize_youtube_url
 
 T = TypeVar("T")
+
+
+def _validate_password_bytes(value: Optional[str]) -> Optional[str]:
+    if value is not None and len(value.encode("utf-8")) > 72:
+        raise ValueError("Password must be at most 72 UTF-8 bytes")
+    return value
 
 
 # ==============================================================================
@@ -22,12 +29,48 @@ class PaginatedResponse(BaseModel, Generic[T]):
 # AUTHENTICATION & USER SCHEMAS
 # ==============================================================================
 
+class AnnouncementResponse(BaseModel):
+    id: str
+    title: str
+    message: str
+    class_id: int
+    class_name: Optional[str] = None
+    subject_id: Optional[int] = None
+    subject_name: Optional[str] = None
+    teacher_id: str
+    priority: str
+    is_alert: bool
+    link_url: Optional[str] = None
+    link_label: Optional[str] = None
+    event_date: Optional[date] = None
+    pdf_filename: Optional[str] = None
+    attachment_filename: Optional[str] = None
+    poster_filename: Optional[str] = None
+    has_pdf: bool
+    has_attachment: bool
+    has_poster: bool
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 class CourseMaterialCreate(BaseModel):
     class_id: int
     subject_id: int
     title: str = Field(..., min_length=1, max_length=180)
     content_type: Literal["text/plain", "text/markdown"] = "text/markdown"
-    content: str = Field(..., min_length=20, max_length=100000)
+    content: str = Field("", max_length=100000)
+    source_url: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("source_url")
+    @classmethod
+    def validate_youtube_url(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_youtube_url(value)
+
+    @model_validator(mode="after")
+    def require_notes_or_video(self):
+        if len(self.content.strip()) < 20 and not self.source_url:
+            raise ValueError("Add at least 20 characters of notes or a YouTube video link.")
+        return self
 
 
 class CourseMaterialUpdate(BaseModel):
@@ -35,16 +78,30 @@ class CourseMaterialUpdate(BaseModel):
     content_type: Literal["text/plain", "text/markdown"] = "text/markdown"
     content: str = Field(..., min_length=20, max_length=100000)
 
+class CourseMaterialAttachmentResponse(BaseModel):
+    id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 class CourseMaterialResponse(BaseModel):
     id: str
     title: str
     class_id: int
+    class_name: Optional[str] = None
     subject_id: int
+    subject_name: Optional[str] = None
     teacher_id: str
     content_type: str
+    source_url: Optional[str] = None
     version: int
     created_at: datetime
     updated_at: datetime
+    ai_ready: bool = False
+    attachments: List[CourseMaterialAttachmentResponse] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
 class CourseMaterialDetailResponse(CourseMaterialResponse):
@@ -76,6 +133,16 @@ class CourseQuestionResponse(BaseModel):
 class LoginRequest(BaseModel):
     identifier: str = Field(..., description="Email address or Student/Teacher ID")
     password: str = Field(..., min_length=4)
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=32, max_length=8192)
+
+
+class RefreshTokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: Literal["bearer"] = "bearer"
 
 
 class Token(BaseModel):
@@ -165,6 +232,15 @@ class SubjectResponse(SubjectBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class StudentClassroomResponse(BaseModel):
+    id: int
+    name: str
+    year: str
+    section: str
+    department: str
+    subjects: List[SubjectResponse] = Field(default_factory=list)
+
+
 # ==============================================================================
 # STUDENT SCHEMAS
 # ==============================================================================
@@ -181,15 +257,20 @@ class StudentCreate(StudentBase):
     id: str = Field(..., description="Student ID e.g. CSE23001")
     name: str
     email: EmailStr
-    password: Optional[str] = "Student@123"
+    password: str = Field(..., min_length=12, max_length=72)
     class_id: Optional[int] = None
     class_name: Optional[str] = None
+
+    @field_validator("password")
+    @classmethod
+    def password_byte_length(cls, value: str) -> str:
+        return _validate_password_bytes(value)
 
 
 class StudentUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(None, min_length=12, max_length=72)
     department: Optional[str] = None
     course: Optional[str] = None
     year: Optional[str] = None
@@ -197,6 +278,11 @@ class StudentUpdate(BaseModel):
     phone: Optional[str] = None
     class_id: Optional[int] = None
     class_name: Optional[str] = None
+
+    @field_validator("password")
+    @classmethod
+    def password_byte_length(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_password_bytes(value)
 
 
 class BiometricsStatus(BaseModel):
@@ -236,17 +322,27 @@ class TeacherCreate(TeacherBase):
     id: str = Field(..., description="Teacher ID e.g. TCH101")
     name: str
     email: EmailStr
-    password: Optional[str] = "Teacher@123"
+    password: str = Field(..., min_length=12, max_length=72)
     subjects: Optional[List[str]] = None
+
+    @field_validator("password")
+    @classmethod
+    def password_byte_length(cls, value: str) -> str:
+        return _validate_password_bytes(value)
 
 
 class TeacherUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(None, min_length=12, max_length=72)
     department: Optional[str] = None
     phone: Optional[str] = None
     subjects: Optional[List[str]] = None
+
+    @field_validator("password")
+    @classmethod
+    def password_byte_length(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_password_bytes(value)
 
 
 class TeacherResponse(BaseModel):
@@ -481,6 +577,12 @@ class DeviceResponse(DeviceBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DeviceCredentialResponse(BaseModel):
+    device_id: str
+    api_key: str
+    message: str = "Store this key securely. It will not be shown again."
+
+
 # ==============================================================================
 # DASHBOARD SCHEMAS
 # ==============================================================================
@@ -511,6 +613,14 @@ class ScheduleItem(BaseModel):
     status: str
 
 
+class TeacherClassAttendance(BaseModel):
+    class_id: int
+    class_name: str
+    present: int
+    absent: int
+    recorded: int
+
+
 class TeacherDashboardResponse(BaseModel):
     todays_classes: int
     total_students: int
@@ -518,6 +628,7 @@ class TeacherDashboardResponse(BaseModel):
     absent_today: int
     attendance_rate: float
     schedule: List[ScheduleItem]
+    attendance_by_class: List[TeacherClassAttendance] = Field(default_factory=list)
 
 
 class AdminDashboardResponse(BaseModel):

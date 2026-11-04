@@ -128,7 +128,7 @@ async function request(endpoint, options = {}) {
     reqHeaders['Content-Type'] = 'application/json';
   }
 
-  if (requiresAuth) {
+    if (requiresAuth) {
     const token = tokenStorage.getAccessToken();
     if (token) {
       reqHeaders['Authorization'] = `Bearer ${token}`;
@@ -152,9 +152,11 @@ async function request(endpoint, options = {}) {
 
   // Handle 401 Unauthorized
   if (response.status === 401) {
-    tokenStorage.clearSession();
-    notifyUnauthorized();
-    throw new ApiError('Session expired or invalid credentials. Please log in again.', 401);
+    if (requiresAuth) {
+      tokenStorage.clearSession();
+      notifyUnauthorized();
+    }
+    throw new ApiError(requiresAuth ? 'Session expired or invalid credentials. Please log in again.' : 'Device authentication failed.', 401);
   }
 
   // Handle No Content response
@@ -336,6 +338,65 @@ export const studentApi = {
    */
   getProfile: async () => {
     return await request('/students/profile');
+  },
+  getClassrooms: async () => await request('/students/classrooms'),
+};
+
+/**
+ * Course material and grounded AI endpoints.
+ */
+export const learningApi = {
+  status: async () => await request('/api/ai/status'),
+  listMaterials: async () => await request('/api/materials'),
+  getMaterial: async (materialId) => await request('/api/materials/' + encodeURIComponent(materialId)),
+  createMaterial: async (material) => await request('/api/materials', { method: 'POST', body: material }),
+  uploadMaterials: async (formData) => await request('/api/materials/upload', { method: 'POST', body: formData }),
+  getAttachmentBlob: async (materialId, attachmentId) => {
+    const base = API_BASE_URL.replace(/\/$/, '');
+    const token = tokenStorage.getAccessToken();
+    const response = await fetch(base + '/api/materials/' + encodeURIComponent(materialId) + '/attachments/' + encodeURIComponent(attachmentId), {
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+    });
+    if (response.status === 401) {
+      tokenStorage.clearSession();
+      notifyUnauthorized();
+      throw new ApiError('Session expired or invalid credentials.', 401);
+    }
+    if (!response.ok) {
+      let message = 'Could not download this course file.';
+      try { const data = await response.json(); if (typeof data.detail === 'string') message = data.detail; } catch { /* safe fallback */ }
+      throw new ApiError(message, response.status);
+    }
+    return response.blob();
+  },
+  summarize: async (materialId) => await request('/api/ai/materials/' + encodeURIComponent(materialId) + '/summary', { method: 'POST' }),
+  ask: async (materialId, question) => await request('/api/ai/materials/' + encodeURIComponent(materialId) + '/questions', { method: 'POST', body: { question } }),
+};
+
+export const announcementApi = {
+  list: async () => await request('/api/announcements'),
+  listMine: async () => await request('/api/announcements/mine'),
+  create: async (formData) => await request('/api/announcements', { method: 'POST', body: formData }),
+  getAttachmentBlob: async (announcementId, kind) => {
+    const base = API_BASE_URL.replace(/\/$/, '');
+    const token = tokenStorage.getAccessToken();
+    const response = await fetch(base + '/api/announcements/' + encodeURIComponent(announcementId) + '/attachments/' + kind, {
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+    });
+    if (response.status === 401) {
+      tokenStorage.clearSession();
+      notifyUnauthorized();
+      throw new ApiError('Session expired or invalid credentials.', 401);
+    }
+    if (!response.ok) {
+      let message = 'Could not load this attachment.';
+      try {
+        const data = await response.json();
+        if (typeof data.detail === 'string') message = data.detail;
+      } catch { /* Keep the safe fallback. */ }
+      throw new ApiError(message, response.status);
+    }
+    return response.blob();
   },
 };
 
@@ -618,27 +679,30 @@ export const adminApi = {
 
   // Hardware Device Network
   getDevices: async () => {
-    return await request('/admin/devices');
+    return await request('/devices');
   },
   createDevice: async (deviceData) => {
-    return await request('/admin/devices', {
+    return await request('/devices', {
       method: 'POST',
       body: deviceData,
     });
   },
+  provisionDevice: async (id) => {
+    return await request(`/devices/${id}/credential`, { method: 'POST' });
+  },
   updateDevice: async (id, deviceData) => {
-    return await request(`/admin/devices/${id}`, {
+    return await request(`/devices/${id}`, {
       method: 'PUT',
       body: deviceData,
     });
   },
   deleteDevice: async (id) => {
-    return await request(`/admin/devices/${id}`, {
+    return await request(`/devices/${id}`, {
       method: 'DELETE',
     });
   },
   toggleDeviceStatus: async (id, status) => {
-    return await request(`/admin/devices/${id}/status`, {
+    return await request(`/devices/${id}/status`, {
       method: 'PUT',
       body: { status },
     });
@@ -719,23 +783,29 @@ export const adminApi = {
  * ============================================================================
  */
 export const deviceIntegrationApi = {
-  recordRfid: async ({ deviceId, rfidUid, timestamp }) => {
+  recordRfid: async ({ deviceId, deviceKey, rfidUid, timestamp }) => {
     return await request('/attendance/rfid', {
       method: 'POST',
+      requiresAuth: false,
+      headers: { 'X-Device-ID': deviceId, 'X-Device-Key': deviceKey },
       body: { device_id: deviceId, rfid_uid: rfidUid, timestamp },
     });
   },
 
-  recordFingerprint: async ({ deviceId, templateId, confidence, timestamp }) => {
+  recordFingerprint: async ({ deviceId, deviceKey, templateId, confidence, timestamp }) => {
     return await request('/attendance/fingerprint', {
       method: 'POST',
+      requiresAuth: false,
+      headers: { 'X-Device-ID': deviceId, 'X-Device-Key': deviceKey },
       body: { device_id: deviceId, template_id: templateId, confidence, timestamp },
     });
   },
 
-  recordFace: async ({ deviceId, studentId, confidence, timestamp }) => {
+  recordFace: async ({ deviceId, deviceKey, studentId, confidence, timestamp }) => {
     return await request('/attendance/face', {
       method: 'POST',
+      requiresAuth: false,
+      headers: { 'X-Device-ID': deviceId, 'X-Device-Key': deviceKey },
       body: { device_id: deviceId, student_id: studentId, confidence, timestamp },
     });
   },
