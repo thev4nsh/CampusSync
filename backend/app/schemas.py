@@ -106,7 +106,6 @@ class CourseMaterialResponse(BaseModel):
 
 class CourseMaterialDetailResponse(CourseMaterialResponse):
     content: str
-    summary: Optional[str] = None
 
 
 class CourseMaterialSummaryResponse(BaseModel):

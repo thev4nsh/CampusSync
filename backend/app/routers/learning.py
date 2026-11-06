@@ -44,7 +44,7 @@ def get_ai_status(
 ):
     limit = daily_limit_for(current_user)
     return {
-        "configured": bool(settings.GEMINI_API_KEY),
+        "configured": bool(settings.OPENAI_API_KEY),
         "requests_used_today": used_today(db, current_user.id),
         "daily_request_limit": limit,
     }
@@ -229,11 +229,7 @@ def get_course_material(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    material = _get_accessible_material(db, material_id, current_user)
-    response = CourseMaterialDetailResponse.model_validate(material)
-    if material.summary_version != material.version:
-        response.summary = None
-    return response
+    return _get_accessible_material(db, material_id, current_user)
 
 
 @materials_router.get("/{material_id}/attachments/{attachment_id}")
@@ -294,14 +290,13 @@ def update_course_material(
 )
 def summarize_course_material(
     material_id: str,
-    force_refresh: bool = False,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
     material = _get_accessible_material(db, material_id, current_user)
     if not material.ai_ready:
         raise HTTPException(status_code=422, detail="This post has no readable text for AI summarization yet. Try adding text-based files or notes.")
-    if material.summary and material.summary_version == material.version and not force_refresh:
+    if material.summary and material.summary_version == material.version:
         summary = material.summary
     else:
         ensure_ai_configured()
@@ -333,9 +328,7 @@ def ask_course_material(
     ensure_ai_configured()
     consume_ai_request(db, current_user)
     answer, citations, abstained = answer_from_material(
-        material.content,
-        payload.question,
-        material.summary if material.summary_version == material.version else None,
+        material.content, payload.question
     )
     return CourseQuestionResponse(
         material_id=material.id,

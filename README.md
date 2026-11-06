@@ -38,15 +38,22 @@ The platform is being built around a **FastAPI** backend and **PostgreSQL** data
 
 ```text
 CampusSync/
-├── frontend/                # React 18 + Vite 6 + Tailwind CSS SPA
+├── frontend/                # React 18 + Vite 6 + Tailwind CSS + react-router-dom SPA
 │   ├── src/
-│   │   ├── api.js           # API abstraction layer & JWT session storage
-│   │   ├── App.jsx          # Role-based router & toast notifications
-│   │   ├── Login.jsx        # Institutional login form (JWT)
-│   │   ├── Student.jsx      # Student dashboard & biometric profile
-│   │   ├── Teacher.jsx      # Faculty terminal & live attendance feed
-│   │   ├── Admin.jsx        # Campus administration & terminal registry
-│   │   └── index.css        # Tailwind styles & skeleton animations
+│   │   ├── api/
+│   │   │   └── api.js       # API abstraction layer & JWT session storage
+│   │   ├── pages/
+│   │   │   ├── LoginPage.jsx      # Institutional login page  (/login)
+│   │   │   ├── StudentPortal.jsx  # Student dashboard      (/student/*)
+│   │   │   ├── TeacherPortal.jsx  # Faculty roll call      (/teacher/*)
+│   │   │   └── AdminPortal.jsx    # Campus administration  (/admin/*)
+│   │   ├── components/
+│   │   │   ├── Classrooms.jsx     # Unified class stream (shared)
+│   │   │   ├── CourseMaterials.jsx# Coursework library & AI study tools (shared)
+│   │   │   └── Announcements.jsx  # Class communication feed (shared)
+│   │   ├── App.jsx         # Router, role guards & toast notifications
+│   │   ├── main.jsx        # React entry point
+│   │   └── index.css       # Tailwind styles & skeleton animations
 │   ├── .env.example         # Frontend environment template
 │   └── package.json         # NPM configuration
 │
@@ -133,13 +140,37 @@ npm run dev
 ```
 
 Visit:
-* **Frontend Application:** [http://localhost:5173](http://localhost:5173)
+* **Frontend Application:** [http://localhost:3000](http://localhost:3000)
 * **Backend Swagger Documentation:** [http://localhost:8000/docs](http://localhost:8000/docs)
+
+### 3. Application Routes (react-router-dom)
+
+Every portal page has its own URL — refreshing, bookmarking, and the browser
+Back/Forward buttons work everywhere.
+
+| Route | Page |
+| --- | --- |
+| `/login` | Institutional sign-in |
+| `/student` | Student dashboard |
+| `/student/attendance` `/student/history` | Student attendance summary & full log |
+| `/student/classrooms` `/student/materials` `/student/announcements` | Classroom stream, coursework, notices |
+| `/student/profile` | Student profile |
+| `/teacher` | Faculty dashboard |
+| `/teacher/take-attendance` | Manual roll call (RFID / fingerprint / face arrive in Phase 2) |
+| `/teacher/records` | Session records (table & calendar) |
+| `/teacher/students` `/teacher/classes` `/teacher/classrooms` | Roster & assigned classes |
+| `/teacher/materials` `/teacher/announcements` `/teacher/reports` `/teacher/profile` | Faculty tools |
+| `/admin` | Administration overview |
+| `/admin/students` `/admin/teachers` `/admin/classes` `/admin/subjects` | Master data management |
+| `/admin/attendance` `/admin/reports` `/admin/settings` | Institutional records & configuration |
+
+Route guards: signed-out visitors are sent to `/login`, and each user can only
+open the portal matching their backend-assigned role.
 
 ---
 
-## 📄 Documentation & Action Checklist
-For the step-by-step checklist of manual software installation, database setup, and college server deployment, refer to [`TODO.txt`](file:///C:/Users/LOKI/Documents/CampusSync/TODO.txt).
+## 📄 Documentation
+Project plans and API contracts live in the [`docs/`](docs) folder. For backend technical details, see [`backend/README.md`](backend/README.md).
 
 ---
 

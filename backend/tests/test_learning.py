@@ -2,36 +2,9 @@ from app import models
 from app.routers import learning as learning_router
 
 
-def test_material_detail_includes_only_current_cached_summary(
-    client, db, seed_data, student_token
-):
-    material = models.CourseMaterial(
-        id="material-with-summary",
-        title="Course notes with cached summary",
-        content="Readable course notes about local search and state spaces.",
-        class_id=seed_data["class"].id,
-        subject_id=seed_data["subject"].id,
-        teacher_id=seed_data["teacher"].id,
-        version=2,
-        summary="## Overview\n\nThe notes explain local search.",
-        summary_version=2,
-    )
-    db.add(material)
-    db.commit()
-
-    response = client.get(
-        f"/api/materials/{material.id}",
-        headers={"Authorization": f"Bearer {student_token}"},
-    )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["summary"].startswith("## Overview")
-
-
 def test_enrolled_student_can_summarize_and_ask_about_course_notes(
     client, db, seed_data, student_token, monkeypatch
 ):
-    monkeypatch.setattr(learning_router.settings, "GEMINI_API_KEY", "test-gemini-key")
     material = models.CourseMaterial(
         id="material-current-class",
         title="Binary Search Trees",
@@ -47,7 +20,7 @@ def test_enrolled_student_can_summarize_and_ask_about_course_notes(
     monkeypatch.setattr(
         learning_router,
         "answer_from_material",
-        lambda content, question, course_summary=None: (
+        lambda content, question: (
             "Smaller values go into the left subtree.",
             [{"passage_id": "P1", "quote": "smaller values are in the left subtree"}],
             False,
@@ -115,7 +88,6 @@ def test_student_cannot_use_ai_on_another_class_material(
 def test_youtube_caption_upload_feeds_student_ai_summary(
     client, seed_data, teacher_token, student_token, monkeypatch
 ):
-    monkeypatch.setattr(learning_router.settings, "GEMINI_API_KEY", "test-gemini-key")
     captions = b"""WEBVTT
 
 00:00:01.000 --> 00:00:05.000

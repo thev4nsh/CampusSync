@@ -1,128 +1,117 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import Login from './Login';
-import Student from './Student';
-import Teacher from './Teacher';
-import Admin from './Admin';
-import { tokenStorage, authApi, onUnauthorized } from './api';
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useNavigate,
+} from 'react-router-dom';
+import LoginPage from './pages/LoginPage';
+import StudentPortal from './pages/StudentPortal';
+import TeacherPortal from './pages/TeacherPortal';
+import AdminPortal from './pages/AdminPortal';
+import { tokenStorage, authApi, onUnauthorized } from './api/api';
 import { CheckCircle2, AlertCircle, Info, X, Loader2 } from 'lucide-react';
 
-export default function App() {
+/** Build the home URL for a portal role, e.g. role 'teacher' -> '/teacher'. */
+export function roleHome(role) {
+  return '/' + (String(role || 'student').toLowerCase().replace(/[^a-z]/g, '') || 'student');
+}
+
+/** Full-screen boot screen shown while the stored session is being validated. */
+function BootScreen() {
+  return (
+    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white space-y-4 font-sans">
+      <div className="w-12 h-12 rounded-2xl bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-600/30">
+        <Loader2 className="w-6 h-6 animate-spin text-white" />
+      </div>
+      <p className="text-sm font-semibold tracking-wide text-slate-300">Initializing CampusSync...</p>
+    </div>
+  );
+}
+
+/** Route guard: not signed in -> /login; wrong role -> that user's own portal home. */
+function RequireRole({ user, role, children }) {
+  if (!user) return <Navigate to="/login" replace />;
+  if ((user?.role || '').toLowerCase() !== role) return <Navigate to={roleHome(user?.role)} replace />;
+  return children;
+}
+
+function AppInner() {
   const [currentUser, setCurrentUser] = useState(() => tokenStorage.getUser());
-  const [role, setRole] = useState(() => {
-    const user = tokenStorage.getUser();
-    if (!tokenStorage.isAuthenticated()) return 'login';
-    return user?.role?.toLowerCase() || 'login';
-  });
   const [isInitializing, setIsInitializing] = useState(true);
   const [institutionInfo, setInstitutionInfo] = useState(null);
 
-  // Toast Notification System State
+  // Toast Notification System
   const [toast, setToast] = useState(null);
+  const navigate = useNavigate();
 
   const showToast = useCallback((message, type = 'success') => {
     setToast({ message, type, id: Date.now() });
-    setTimeout(() => {
-      setToast(null);
-    }, 4500);
+    setTimeout(() => setToast(null), 4500);
   }, []);
 
-  // Fetch public institution branding
   const refreshInstitutionInfo = useCallback(async () => {
     try {
       const data = await authApi.getInstitutionInfo();
-      if (data) {
-        setInstitutionInfo(data);
-      }
+      if (data) setInstitutionInfo(data);
     } catch {
-      // Fallback
+      // Branding stays on defaults if the institution endpoint is unreachable.
     }
   }, []);
 
-  // Validate session on app launch
+  // Validate the persistent session once on app launch
   useEffect(() => {
     const initAuth = async () => {
       refreshInstitutionInfo();
       if (tokenStorage.isAuthenticated()) {
         try {
           const me = await authApi.getMe();
-          if (me) {
-            const userRole = (me.role || currentUser?.role || 'student').toLowerCase();
-            setCurrentUser(me);
-            setRole(userRole);
-          }
+          if (me) setCurrentUser(me);
         } catch {
-          // If token expired / invalid
-          if (!tokenStorage.isAuthenticated()) {
-            setCurrentUser(null);
-            setRole('login');
-          }
+          // Token is expired/invalid; the stored user is cleared so guards send us to /login.
+          if (!tokenStorage.isAuthenticated()) setCurrentUser(null);
         }
-      } else {
-        setRole('login');
       }
       setIsInitializing(false);
     };
-
     initAuth();
   }, [refreshInstitutionInfo]);
 
-  // Listen for 401 Unauthorized events from API requests
+  // Any API call that comes back 401 clears the session and lifts the user to /login.
   useEffect(() => {
     const unsubscribe = onUnauthorized(() => {
       setCurrentUser(null);
-      setRole('login');
       showToast('Your session has expired. Please sign in again.', 'warning');
+      navigate('/login', { replace: true });
     });
     return () => unsubscribe();
-  }, [showToast]);
+  }, [showToast, navigate]);
 
-  // Keep browser Back inside the portal and let each role return to its dashboard.
-  useEffect(() => {
-    if (isInitializing || role === 'login') return undefined;
-    const stayInPortal = () => {
-      window.history.pushState({ campusSyncPortal: true }, '', window.location.href);
-      window.dispatchEvent(new Event('campussync:back'));
-    };
-    window.history.pushState({ campusSyncPortal: true }, '', window.location.href);
-    window.addEventListener('popstate', stayInPortal);
-    return () => window.removeEventListener('popstate', stayInPortal);
-  }, [isInitializing, role]);
-
-  // Login handler
-  const handleLoginSuccess = (user, userRole) => {
+  const handleLoginSuccess = useCallback((user, userRole) => {
     const normalizedRole = (userRole || user?.role || 'student').toLowerCase();
     setCurrentUser(user);
-    setRole(normalizedRole);
+    navigate(roleHome(normalizedRole), { replace: true });
 
     const friendlyName = user?.name || user?.username || 'User';
     showToast(`Welcome back, ${friendlyName}! Authenticated as ${normalizedRole.toUpperCase()}.`, 'success');
-  };
+  }, [navigate, showToast]);
 
-  // Logout handler
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     try {
       await authApi.logout();
     } catch {
-      // Fallback
+      // Local sign-out proceeds even if the server notification fails.
     } finally {
       setCurrentUser(null);
-      setRole('login');
+      navigate('/login', { replace: true });
       showToast('You have signed out successfully.', 'info');
     }
-  };
+  }, [navigate, showToast]);
 
-  if (isInitializing) {
-    return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white space-y-4 font-sans">
-        <div className="w-12 h-12 rounded-2xl bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-600/30">
-          <Loader2 className="w-6 h-6 animate-spin text-white" />
-        </div>
-        <p className="text-sm font-semibold tracking-wide text-slate-300">
-          Initializing {institutionInfo?.college_short_name || 'CampusSync'}...
-        </p>
-      </div>
-    );
-  }
+  if (isInitializing) return <BootScreen />;
+
+  const signedInRole = roleHome(currentUser?.role);
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans relative selection:bg-blue-600 selection:text-white">
@@ -140,8 +129,8 @@ export default function App() {
             <div className="flex-1 text-xs font-semibold pr-2 leading-relaxed">
               {toast.message}
             </div>
-            <button 
-              onClick={() => setToast(null)} 
+            <button
+              onClick={() => setToast(null)}
               className="text-white/60 hover:text-white transition-colors"
               aria-label="Dismiss notification"
             >
@@ -151,41 +140,68 @@ export default function App() {
         </div>
       )}
 
-      {/* Role-Based Protected View Router */}
-      {role === 'login' && (
-        <Login 
-          onLoginSuccess={handleLoginSuccess}
-          institutionInfo={institutionInfo}
+      <Routes>
+        {/* Landed on the bare domain: send people where they live. */}
+        <Route
+          path="/"
+          element={<Navigate to={currentUser ? signedInRole : '/login'} replace />}
         />
-      )}
 
-      {role === 'student' && (
-        <Student 
-          currentUser={currentUser} 
-          onLogout={handleLogout}
-          showToast={showToast}
-          institutionInfo={institutionInfo}
+        {/* Public page */}
+        <Route
+          path="/login"
+          element={currentUser ? <Navigate to={signedInRole} replace /> : (
+            <LoginPage onLoginSuccess={handleLoginSuccess} institutionInfo={institutionInfo} />
+          )}
         />
-      )}
 
-      {role === 'teacher' && (
-        <Teacher 
-          currentUser={currentUser}
-          onLogout={handleLogout}
-          showToast={showToast}
-          institutionInfo={institutionInfo}
-        />
-      )}
+        {/* Student portal: /student and /student/<page> */}
+        <Route path="/student" element={
+          <RequireRole user={currentUser} role="student">
+            <StudentPortal currentUser={currentUser} onLogout={handleLogout} showToast={showToast} institutionInfo={institutionInfo} basePath="/student" />
+          </RequireRole>
+        } />
+        <Route path="/student/:section" element={
+          <RequireRole user={currentUser} role="student">
+            <StudentPortal currentUser={currentUser} onLogout={handleLogout} showToast={showToast} institutionInfo={institutionInfo} basePath="/student" />
+          </RequireRole>
+        } />
 
-      {role === 'admin' && (
-        <Admin 
-          currentUser={currentUser}
-          onLogout={handleLogout}
-          showToast={showToast}
-          institutionInfo={institutionInfo}
-          onInstitutionUpdated={refreshInstitutionInfo}
-        />
-      )}
+        {/* Teacher portal: /teacher and /teacher/<page> */}
+        <Route path="/teacher" element={
+          <RequireRole user={currentUser} role="teacher">
+            <TeacherPortal currentUser={currentUser} onLogout={handleLogout} showToast={showToast} institutionInfo={institutionInfo} basePath="/teacher" />
+          </RequireRole>
+        } />
+        <Route path="/teacher/:section" element={
+          <RequireRole user={currentUser} role="teacher">
+            <TeacherPortal currentUser={currentUser} onLogout={handleLogout} showToast={showToast} institutionInfo={institutionInfo} basePath="/teacher" />
+          </RequireRole>
+        } />
+
+        {/* Admin portal: /admin and /admin/<page> */}
+        <Route path="/admin" element={
+          <RequireRole user={currentUser} role="admin">
+            <AdminPortal onLogout={handleLogout} showToast={showToast} institutionInfo={institutionInfo} onInstitutionUpdated={refreshInstitutionInfo} basePath="/admin" />
+          </RequireRole>
+        } />
+        <Route path="/admin/:section" element={
+          <RequireRole user={currentUser} role="admin">
+            <AdminPortal onLogout={handleLogout} showToast={showToast} institutionInfo={institutionInfo} onInstitutionUpdated={refreshInstitutionInfo} basePath="/admin" />
+          </RequireRole>
+        } />
+
+        {/* Anything else falls back to a sensible home */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AppInner />
+    </BrowserRouter>
   );
 }

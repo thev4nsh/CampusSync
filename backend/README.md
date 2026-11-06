@@ -127,12 +127,11 @@ JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=15
 REFRESH_TOKEN_EXPIRE_DAYS=7
 
-# Gemini course-material summaries and grounded Q&A
-GEMINI_API_KEY=
-GEMINI_MODEL=gemini-3.6-flash
-GEMINI_FALLBACK_MODEL=gemini-3.5-flash-lite
-AI_SUMMARY_MAX_OUTPUT_TOKENS=1200
-AI_ANSWER_MAX_OUTPUT_TOKENS=900
+# OpenAI course-material summaries and grounded Q&A
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-6-luna
+OPENAI_SUMMARY_MAX_OUTPUT_TOKENS=1200
+OPENAI_ANSWER_MAX_OUTPUT_TOKENS=900
 AI_DAILY_LIMIT_STUDENT=25
 AI_DAILY_LIMIT_STAFF=100
 
@@ -204,8 +203,8 @@ All attendance channels (RFID, Fingerprint, Face Recognition, Manual) pass throu
 * **No Biometric Images Stored:** Fingerprint template indices and face embedding reference IDs stored only; raw biometrics are never saved.
 * **CORS Whitelisting:** Restricted to configured frontend domains.
 * **Institution Isolation:** Authenticated ORM queries and writes are scoped to the user's college; existing records are assigned to the first CampusSync institution by migration.
-* **AI Data Handling:** Only readable course material is sent to Gemini. Grade and biometric data are excluded, daily request caps are enforced, and returned source quotes are verified before displaying answers.
+* **AI Data Handling:** Only readable course material is sent to the OpenAI API. Calls disable stored Responses, exclude grades and biometric data, enforce daily request caps, and verify returned source quotes before displaying answers.
 
 ### AI Course Study Tools
 
-Teachers can post text notes or upload readable PDF, Office, text, SRT, and VTT files to an assigned class. A YouTube lecture link can be attached with a teacher-provided caption/transcript file; arbitrary YouTube caption scraping is not used. Students in that class can request a cached summary or ask a question; the backend retrieves relevant passages and returns exact matching source excerpts. Scanned PDFs and image-only files need OCR before they can be used for AI. Store the Gemini API key only in `backend/.env` or a deployment secret, never in a `VITE_` variable. Check `GET /api/ai/status` while signed in to verify configuration and daily usage. Review Google's Gemini API data-use terms before using free-tier access with institutional or student materials.
+Teachers can post text notes or upload readable PDF, Office, text, SRT, and VTT files to an assigned class. A YouTube lecture link can be attached with a teacher-provided caption/transcript file; arbitrary YouTube caption scraping is not used. Students in that class can request a cached summary or ask a question; the backend retrieves relevant passages and returns exact matching source excerpts. Scanned PDFs and image-only files need OCR before they can be used for AI. Store the API key only in `backend/.env` or a deployment secret, never in a `VITE_` variable. Check `GET /api/ai/status` while signed in to verify configuration and daily usage.
