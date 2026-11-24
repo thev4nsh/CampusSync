@@ -16,7 +16,7 @@ from app.models import (
     AttendanceSession,
     AttendanceRecord,
     AttendanceStatus,
-    SessionStatus
+    SessionStatus,
 )
 from app.schemas import (
     TeacherResponse,
@@ -27,8 +27,11 @@ from app.schemas import (
     AttendanceRecordResponse,
     ScheduleItem,
     TeacherClassAttendance,
+    SubjectAttendanceResponse,
+    SubjectStudentAttendance,
 )
 from app.dependencies import get_current_teacher
+from app.services.attendance_service import ATTENDED_STATUSES, attendance_percentage
 
 router = APIRouter(prefix="/teachers", tags=["Teachers"])
 
@@ -71,8 +74,7 @@ def get_teacher_dashboard(
 
     present_today = sum(1 for r in today_records if r.status == AttendanceStatus.PRESENT)
     absent_today = sum(1 for r in today_records if r.status == AttendanceStatus.ABSENT)
-    total_today = len(today_records)
-    attendance_rate = round((present_today / total_today * 100), 1) if total_today > 0 else 0.0
+    attendance_rate = attendance_percentage(today_records)
 
     class_ids_for_today = {session.class_id for session in today_sessions}
     class_names = {
@@ -155,7 +157,9 @@ def get_teacher_classes(
             department=c.department or "Computer Science & Engineering",
             created_at=c.created_at,
             total_students=student_count,
-            subjects=subject_names
+            subjects=subject_names,
+            batch_id=c.batch_id,
+            batch_name=c.batch_name,
         ))
     return results
 
@@ -182,6 +186,70 @@ def get_teacher_subjects(
                 query = query.filter(TeacherSubjectAssignment.class_id == cls.id)
 
     return query.distinct().all()
+
+
+@router.get(
+    "/classes/{class_id}/subjects/{subject_id}/attendance",
+    response_model=SubjectAttendanceResponse,
+)
+def get_subject_class_attendance(
+    class_id: int,
+    subject_id: int,
+    teacher: Teacher = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Attendance for one subject in one assigned class, per enrolled student."""
+    target_class = db.query(Class).filter(Class.id == class_id).first()
+    if not target_class:
+        raise HTTPException(status_code=404, detail="Class not found.")
+    subject = db.query(Subject).filter(Subject.id == subject_id).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+
+    assignment = db.query(TeacherSubjectAssignment.id).filter(
+        TeacherSubjectAssignment.teacher_id == teacher.id,
+        TeacherSubjectAssignment.class_id == target_class.id,
+        TeacherSubjectAssignment.subject_id == subject.id,
+    ).first()
+    if not assignment:
+        raise HTTPException(status_code=403, detail="You are not assigned to this subject in this class.")
+
+    sessions = db.query(AttendanceSession).filter(
+        AttendanceSession.class_id == target_class.id,
+        AttendanceSession.subject_id == subject.id,
+    ).all()
+    session_ids = [session.id for session in sessions]
+    records = db.query(AttendanceRecord).filter(
+        AttendanceRecord.session_id.in_(session_ids)
+    ).all() if session_ids else []
+
+    by_student: dict[str, list[AttendanceRecord]] = {}
+    for record in records:
+        by_student.setdefault(record.student_id, []).append(record)
+
+    students = db.query(Student).filter(Student.class_id == target_class.id).all()
+    rows = []
+    for student in students:
+        student_records = by_student.get(student.id, [])
+        rows.append(SubjectStudentAttendance(
+            student_id=student.id,
+            student_name=student.user.name if student.user else student.id,
+            class_name=target_class.name,
+            present=sum(1 for record in student_records if record.status in ATTENDED_STATUSES),
+            total=len(student_records),
+            percentage=attendance_percentage(student_records),
+        ))
+    rows.sort(key=lambda row: row.student_name.lower())
+
+    return SubjectAttendanceResponse(
+        class_id=target_class.id,
+        class_name=target_class.name,
+        subject_id=subject.id,
+        subject_name=subject.name,
+        sessions_held=len(sessions),
+        total_records=len(records),
+        students=rows,
+    )
 
 
 @router.get("/classes/{class_id}/students", response_model=List[StudentResponse])
@@ -214,10 +282,7 @@ def get_class_students_roster(
     students = db.query(Student).filter(Student.class_id == target_class.id).all()
     results = []
     for s in students:
-        s_records = s.attendance_records
-        total_s = len(s_records)
-        pres_s = sum(1 for r in s_records if r.status in [AttendanceStatus.PRESENT, AttendanceStatus.LATE])
-        pct = round((pres_s / total_s * 100), 1) if total_s > 0 else 0.0
+        pct = attendance_percentage(s.attendance_records)
         results.append(StudentResponse(
             id=s.id,
             name=s.user.name if s.user else s.id,
@@ -248,10 +313,7 @@ def get_teacher_all_students(
 
     results = []
     for s in students:
-        s_records = s.attendance_records
-        total_s = len(s_records)
-        pres_s = sum(1 for r in s_records if r.status in [AttendanceStatus.PRESENT, AttendanceStatus.LATE])
-        pct = round((pres_s / total_s * 100), 1) if total_s > 0 else 0.0
+        pct = attendance_percentage(s.attendance_records)
         results.append(StudentResponse(
             id=s.id,
             name=s.user.name if s.user else s.id,
@@ -286,8 +348,6 @@ def export_teacher_attendance_csv(
         ).order_by(AttendanceRecord.timestamp.desc())
 
     records = query.all()
-    if not records:
-        records = db.query(AttendanceRecord).order_by(AttendanceRecord.timestamp.desc()).all()
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -396,6 +456,7 @@ def get_teacher_reports(
     db: Session = Depends(get_db)
 ):
     """Retrieve analytical summary metrics for faculty reports."""
+    valid_class_ids = [a.class_id for a in teacher.subject_assignments if a.class_id is not None]
     total_sessions = db.query(AttendanceSession).filter(AttendanceSession.teacher_id == teacher.id).count()
     records = db.query(AttendanceRecord).join(AttendanceSession).filter(AttendanceSession.teacher_id == teacher.id).all()
     
@@ -405,7 +466,12 @@ def get_teacher_reports(
 
     return {
         "average_rate": avg_rate,
-        "below_threshold": sum(1 for s in db.query(Student).all() if len(s.attendance_records) > 0 and (sum(1 for r in s.attendance_records if r.status == AttendanceStatus.PRESENT) / len(s.attendance_records)) < 0.75),
+        "below_threshold": sum(
+            1
+            for student in db.query(Student).filter(Student.class_id.in_(valid_class_ids)).all()
+            if student.attendance_records
+            and attendance_percentage(student.attendance_records) < 75
+        ) if valid_class_ids else 0,
         "total_sessions": total_sessions
     }
 
@@ -422,6 +488,7 @@ def get_teacher_profile(
         "name": teacher.user.name,
         "email": teacher.user.email,
         "department": teacher.department,
+        "departments": teacher.department_list,
         "phone": teacher.phone,
         "subjects": subjects,
         "created_at": teacher.created_at

@@ -21,6 +21,7 @@ from app.schemas import (
     StudentClassroomResponse,
 )
 from app.dependencies import get_current_student
+from app.services.attendance_service import attendance_percentage
 
 router = APIRouter(prefix="/students", tags=["Students"])
 
@@ -69,6 +70,9 @@ def get_my_student_profile(
         "section": student.section,
         "class_id": student.class_id,
         "class_name": student.class_obj.name if student.class_obj else None,
+        "batch_id": student.batch_id,
+        "batch_name": student.batch_obj.name if student.batch_obj else None,
+        "roll_number": student.roll_number,
         "phone": student.phone,
         "biometrics": {
             "fingerprint": bool(biometric and biometric.fingerprint_enrolled),
@@ -108,9 +112,11 @@ def get_student_dashboard(
     ).order_by(AttendanceRecord.timestamp.desc()).all()
 
     total_classes = len(records)
-    present_classes = sum(1 for r in records if r.status == AttendanceStatus.PRESENT)
+    present_classes = sum(
+        1 for r in records if r.status in (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
+    )
     absent_classes = sum(1 for r in records if r.status == AttendanceStatus.ABSENT)
-    overall_attendance = round((present_classes / total_classes * 100), 1) if total_classes > 0 else 0.0
+    overall_attendance = attendance_percentage(records)
 
     # 2. Compute Subject-wise attendance breakdown
     subject_map = {}

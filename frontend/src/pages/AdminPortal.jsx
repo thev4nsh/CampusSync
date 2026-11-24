@@ -37,12 +37,22 @@ import {
   Sliders,
   AlertTriangle,
   Download,
-  ArrowLeft
+  ArrowLeft,
+  Building2,
+  CalendarRange,
+  Link2,
+  Upload,
+  Image as ImageIcon,
+  Copy,
+  ExternalLink
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { adminApi, ApiError } from '../api/api';
+import { adminApi, academicsApi, assetUrl, ApiError } from '../api/api';
 
-const ADMIN_SECTIONS = ['dashboard', 'students', 'teachers', 'classes', 'subjects', 'attendance', 'reports', 'settings'];
+// Used only to prefill the extra batch name inputs when a batch is split.
+const BATCH_NAME_SUFFIXES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
+const ADMIN_SECTIONS = ['dashboard', 'students', 'teachers', 'departments', 'batches', 'classes', 'subjects', 'assignments', 'registration', 'attendance', 'reports', 'settings'];
 
 export default function Admin({ onLogout, showToast, institutionInfo, onInstitutionUpdated, basePath = '/admin' }) {
   const params = useParams();
@@ -101,7 +111,7 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
   const [teacherFormData, setTeacherFormData] = useState({
     id: '',
     name: '',
-    department: 'Computer Science & Engineering',
+    departments: ['Computer Science & Engineering'],
     email: '',
     password: '',
     phone: '',
@@ -117,10 +127,13 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
   const [showEditClassModal, setShowEditClassModal] = useState(false);
   const [classFormData, setClassFormData] = useState({
     name: '',
-    year: '3rd Year',
+    year: '',
     section: 'A',
-    department: 'Computer Science & Engineering',
+    department: '',
+    batch_id: '',
   });
+  const [classSectionMode, setClassSectionMode] = useState('single');
+  const [classSectionNames, setClassSectionNames] = useState(['']);
   const [editingClassId, setEditingClassId] = useState(null);
   const [classSubmitting, setClassSubmitting] = useState(false);
 
@@ -136,6 +149,51 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
   });
   const [editingSubjectId, setEditingSubjectId] = useState(null);
   const [subjectSubmitting, setSubjectSubmitting] = useState(false);
+
+  // ================= DEPARTMENTS STATE =================
+  const [departments, setDepartments] = useState([]);
+  const [departmentsLoading, setDepartmentsLoading] = useState(false);
+  const [showAddDepartmentModal, setShowAddDepartmentModal] = useState(false);
+  const [showEditDepartmentModal, setShowEditDepartmentModal] = useState(false);
+  const [departmentFormData, setDepartmentFormData] = useState({ code: '', name: '' });
+  const [editingDepartmentId, setEditingDepartmentId] = useState(null);
+  const [departmentSubmitting, setDepartmentSubmitting] = useState(false);
+
+  // ================= BATCHES STATE =================
+  const [batches, setBatches] = useState([]);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [showAddBatchModal, setShowAddBatchModal] = useState(false);
+  const [showEditBatchModal, setShowEditBatchModal] = useState(false);
+  const [batchFormData, setBatchFormData] = useState({ name: '', department_id: '' });
+  const [editingBatchId, setEditingBatchId] = useState(null);
+  const [batchSubmitting, setBatchSubmitting] = useState(false);
+  // "Sections" dropdown: 0 keeps one batch named by the year range, N asks for N names.
+  const [batchSectionCount, setBatchSectionCount] = useState(0);
+  const [batchNames, setBatchNames] = useState(['']);
+
+  // ================= STUDENT REGISTRATION STATE =================
+  const [registrationLinks, setRegistrationLinks] = useState([]);
+  const [registrationRequests, setRegistrationRequests] = useState([]);
+  const [registrationLoading, setRegistrationLoading] = useState(false);
+  const [registrationError, setRegistrationError] = useState(null);
+  const [registrationLabel, setRegistrationLabel] = useState('');
+  const [registrationSubmitting, setRegistrationSubmitting] = useState(false);
+  const [registrationFilter, setRegistrationFilter] = useState('pending');
+  const [rejectingRequest, setRejectingRequest] = useState(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [decidingId, setDecidingId] = useState(null);
+  const [copiedLinkId, setCopiedLinkId] = useState(null);
+
+  // ================= TEACHER CLASS ASSIGNMENTS STATE =================
+  const [assignments, setAssignments] = useState([]);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
+  const [assignmentsError, setAssignmentsError] = useState(null);
+  const [assignmentFormData, setAssignmentFormData] = useState({ teacher_id: '', class_id: '', subject_ids: [] });
+  const [assignmentSubmitting, setAssignmentSubmitting] = useState(false);
+  const [assignmentFilterTeacher, setAssignmentFilterTeacher] = useState('All');
+
+  // ================= INSTITUTION LOGO STATE =================
+  const [logoUploading, setLogoUploading] = useState(false);
 
   // ================= GLOBAL ATTENDANCE STATE =================
   const [attendanceLogs, setAttendanceLogs] = useState([]);
@@ -232,6 +290,46 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
     }
   }, []);
 
+  // ================= FETCH DEPARTMENTS =================
+  const fetchDepartments = useCallback(async () => {
+    setDepartmentsLoading(true);
+    try {
+      const data = await academicsApi.listDepartments();
+      setDepartments(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.warn('Departments fetch error:', err);
+    } finally {
+      setDepartmentsLoading(false);
+    }
+  }, []);
+
+  // ================= FETCH BATCHES =================
+  const fetchBatches = useCallback(async () => {
+    setBatchesLoading(true);
+    try {
+      const data = await academicsApi.listBatches();
+      setBatches(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.warn('Batches fetch error:', err);
+    } finally {
+      setBatchesLoading(false);
+    }
+  }, []);
+
+  // ================= FETCH TEACHER ASSIGNMENTS =================
+  const fetchAssignments = useCallback(async () => {
+    setAssignmentsLoading(true);
+    setAssignmentsError(null);
+    try {
+      const data = await academicsApi.listAssignments();
+      setAssignments(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setAssignmentsError(err.message || 'Unable to load class assignments.');
+    } finally {
+      setAssignmentsLoading(false);
+    }
+  }, []);
+
   // ================= FETCH SUBJECTS =================
   const fetchSubjects = useCallback(async () => {
     setSubjectsLoading(true);
@@ -305,22 +403,63 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
     }
   }, [fetchDatabaseSummary]);
 
+  // ================= FETCH STUDENT REGISTRATION =================
+  const fetchRegistrationData = useCallback(async () => {
+    setRegistrationLoading(true);
+    setRegistrationError(null);
+    try {
+      const [links, requests] = await Promise.all([
+        academicsApi.getRegistrationLinks(),
+        academicsApi.getRegistrationRequests(),
+      ]);
+      setRegistrationLinks(Array.isArray(links) ? links : []);
+      setRegistrationRequests(Array.isArray(requests) ? requests : []);
+    } catch (err) {
+      setRegistrationError(err.message || 'Could not load registration data.');
+    } finally {
+      setRegistrationLoading(false);
+    }
+  }, []);
+
   // Fetch based on active tab
   useEffect(() => {
     if (activeTab === 'dashboard') {
       fetchDashboard();
       fetchClasses();
       fetchSubjects();
+      fetchStudents();
+      fetchTeachers();
     } else if (activeTab === 'students') {
       fetchStudents();
       fetchClasses();
+      fetchDepartments();
+      fetchBatches();
     } else if (activeTab === 'teachers') {
       fetchTeachers();
       fetchSubjects();
+      fetchDepartments();
+    } else if (activeTab === 'departments') {
+      fetchDepartments();
+      fetchBatches();
+      fetchStudents();
+    } else if (activeTab === 'batches') {
+      fetchBatches();
+      fetchDepartments();
+      fetchStudents();
     } else if (activeTab === 'classes') {
       fetchClasses();
+      fetchDepartments();
+      fetchBatches();
     } else if (activeTab === 'subjects') {
       fetchSubjects();
+      fetchDepartments();
+    } else if (activeTab === 'assignments') {
+      fetchAssignments();
+      fetchTeachers();
+      fetchClasses();
+      fetchSubjects();
+    } else if (activeTab === 'registration') {
+      fetchRegistrationData();
     } else if (activeTab === 'attendance') {
       fetchAttendanceLogs();
       fetchStudents();
@@ -331,21 +470,34 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
     } else if (activeTab === 'settings') {
       fetchSettings();
     }
-  }, [activeTab, fetchDashboard, fetchStudents, fetchTeachers, fetchClasses, fetchSubjects, fetchAttendanceLogs, fetchReports, fetchSettings]);
+  }, [activeTab, fetchDashboard, fetchStudents, fetchTeachers, fetchClasses, fetchSubjects, fetchAttendanceLogs, fetchReports, fetchSettings, fetchDepartments, fetchBatches, fetchAssignments, fetchRegistrationData]);
+
+  // Department and batch lists power the dropdowns on every other tab, so load them once.
+  useEffect(() => {
+    fetchDepartments();
+    fetchBatches();
+  }, [fetchDepartments, fetchBatches]);
 
   // ================= STUDENTS HANDLERS =================
+  const departmentNames = departments.map((item) => item.name);
+  const batchesForDepartment = (departmentName) =>
+    batches.filter((batch) => !departmentName || batch.department_name === departmentName);
+
   const handleOpenAddStudent = () => {
+    const firstDepartment = departments[0]?.name || '';
     setStudentFormData({
       id: `CSE23${Math.floor(100 + Math.random() * 900)}`,
       name: '',
-      class_name: classes[0]?.name || 'CSE-3A',
+      class_name: classes[0]?.name || '',
       email: '',
       password: '',
       phone: '',
-      department: 'Computer Science & Engineering',
+      department: firstDepartment,
+      batch_id: batchesForDepartment(firstDepartment)[0]?.id ?? null,
       year: '3rd Year',
       section: 'A',
-      course: 'B.Tech CSE'
+      course: 'B.Tech CSE',
+      roll_number: ''
     });
     setShowAddStudentModal(true);
   };
@@ -355,14 +507,16 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
     setStudentFormData({
       id: student.id,
       name: student.name || '',
-      class_name: student.class_name || classes[0]?.name || 'CSE-3A',
+      class_name: student.class_name || classes[0]?.name || '',
       email: student.email || '',
       password: '',
       phone: student.phone || '',
-      department: student.department || 'Computer Science & Engineering',
+      department: student.department || departments[0]?.name || '',
+      batch_id: student.batch_id ?? null,
       year: student.year || '3rd Year',
       section: student.section || 'A',
-      course: student.course || 'B.Tech CSE'
+      course: student.course || 'B.Tech CSE',
+      roll_number: student.roll_number || ''
     });
     setShowEditStudentModal(true);
   };
@@ -388,7 +542,10 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
     if (!studentFormData.name || !editingStudentId) return;
     setStudentSubmitting(true);
     try {
-      await adminApi.updateStudent(editingStudentId, studentFormData);
+      // A blank password box means "keep the current password", so it is not sent at all.
+      const { password, ...rest } = studentFormData;
+      const payload = password && password.trim() ? { ...rest, password } : rest;
+      await adminApi.updateStudent(editingStudentId, payload);
       setShowEditStudentModal(false);
       setEditingStudentId(null);
       fetchStudents();
@@ -430,12 +587,26 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
     }));
   };
 
+  const toggleDepartmentInForm = (name) => {
+    setTeacherFormData(prev => {
+      const current = Array.isArray(prev.departments) ? prev.departments : [];
+      const exists = current.some(item => item.toLowerCase() === name.toLowerCase());
+      return {
+        ...prev,
+        departments: exists
+          ? current.filter(item => item.toLowerCase() !== name.toLowerCase())
+          : [...current, name]
+      };
+    });
+  };
+
   const handleOpenAddTeacher = () => {
     fetchSubjects();
+    fetchDepartments();
     setTeacherFormData({
       id: `TCH${Math.floor(100 + Math.random() * 900)}`,
       name: '',
-      department: 'Computer Science & Engineering',
+      departments: departments[0]?.name ? [departments[0].name] : [],
       email: '',
       password: '',
       phone: '',
@@ -446,11 +617,16 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
 
   const handleOpenEditTeacher = (teacher) => {
     fetchSubjects();
+    fetchDepartments();
     setEditingTeacherId(teacher.id);
+    const teacherDepartments =
+      Array.isArray(teacher.departments) && teacher.departments.length > 0
+        ? teacher.departments
+        : [teacher.department || departments[0]?.name].filter(Boolean);
     setTeacherFormData({
       id: teacher.id,
       name: teacher.name || '',
-      department: teacher.department || 'Computer Science & Engineering',
+      departments: teacherDepartments,
       email: teacher.email || '',
       password: '',
       phone: teacher.phone || '',
@@ -462,6 +638,10 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
   const handleCreateTeacher = async (e) => {
     e.preventDefault();
     if (!teacherFormData.name || !teacherFormData.email || !teacherFormData.id) return;
+    if ((teacherFormData.departments || []).length === 0) {
+      if (showToast) showToast('Choose at least one department for this faculty member.', 'warning');
+      return;
+    }
     setTeacherSubmitting(true);
     try {
       const payload = {
@@ -482,12 +662,19 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
   const handleUpdateTeacher = async (e) => {
     e.preventDefault();
     if (!teacherFormData.name || !editingTeacherId) return;
+    if ((teacherFormData.departments || []).length === 0) {
+      if (showToast) showToast('Choose at least one department for this faculty member.', 'warning');
+      return;
+    }
     setTeacherSubmitting(true);
     try {
+      const { password, ...rest } = teacherFormData;
       const payload = {
-        ...teacherFormData,
+        ...rest,
         subjects: teacherFormData.subjects.split(',').map(s => s.trim()).filter(Boolean)
       };
+      // A blank password box means "keep the current password", so it is not sent at all.
+      if (password && password.trim()) payload.password = password;
       await adminApi.updateTeacher(editingTeacherId, payload);
       setShowEditTeacherModal(false);
       setEditingTeacherId(null);
@@ -513,12 +700,17 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
 
   // ================= CLASSES HANDLERS =================
   const handleOpenAddClass = () => {
+    const firstDepartment = departments[0]?.name || '';
+    const firstBatch = batchesForDepartment(firstDepartment)[0] || null;
     setClassFormData({
-      name: '',
-      year: '3rd Year',
-      section: 'A',
-      department: 'Computer Science & Engineering',
+      name: firstBatch?.name || '',
+      year: '',
+      section: '',
+      department: firstDepartment,
+      batch_id: firstBatch?.id ?? null,
     });
+    setClassSectionMode('single');
+    setClassSectionNames(['']);
     setShowAddClassModal(true);
   };
 
@@ -526,24 +718,81 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
     setEditingClassId(cls.id);
     setClassFormData({
       name: cls.name || '',
-      year: cls.year || '3rd Year',
-      section: cls.section || 'A',
-      department: cls.department || 'Computer Science & Engineering',
+      year: cls.year || '',
+      section: cls.section || '',
+      department: cls.department || departments[0]?.name || '',
+      batch_id: cls.batch_id ?? null,
     });
     setShowEditClassModal(true);
   };
 
+  const handleClassBatchChange = (event) => {
+    const value = event.target.value;
+    const batchId = value ? Number(value) : null;
+    const batch = batches.find((item) => item.id === batchId);
+    setClassFormData((prev) => ({ ...prev, batch_id: batchId, name: batch ? batch.name : prev.name }));
+  };
+
+  const handleClassSectionModeChange = (mode) => {
+    setClassSectionMode(mode);
+    setClassSectionNames((prev) => (prev.length > 0 ? prev : ['']));
+  };
+
+  const handleSectionNameChange = (index, value) => {
+    setClassSectionNames((prev) => prev.map((item, i) => (i === index ? value : item)));
+  };
+
+  const addSectionNameInput = () => setClassSectionNames((prev) => [...prev, '']);
+
+  const removeSectionNameInput = (index) =>
+    setClassSectionNames((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)));
+
   const handleCreateClass = async (e) => {
     e.preventDefault();
-    if (!classFormData.name) return;
+    const baseName = classFormData.name.trim();
+    if (!baseName) return;
+
+    let sections;
+    if (classSectionMode === 'single') {
+      // Single: one class named after the batch, with an optional section name.
+      sections = [classFormData.section.trim()];
+    } else {
+      // Multiple: one class per section name the admin typed, nothing generated.
+      sections = [];
+      classSectionNames
+        .map((name) => name.trim())
+        .filter(Boolean)
+        .forEach((name) => {
+          if (!sections.some((existing) => existing.toLowerCase() === name.toLowerCase())) sections.push(name);
+        });
+      if (sections.length === 0) {
+        if (showToast) showToast('Add at least one section name.', 'warning');
+        return;
+      }
+    }
+
     setClassSubmitting(true);
+    const created = [];
+    const failed = [];
     try {
-      await adminApi.createClass(classFormData);
-      setShowAddClassModal(false);
-      fetchClasses();
-      if (showToast) showToast(`Class section ${classFormData.name} created.`, 'success');
-    } catch (err) {
-      if (showToast) showToast(err.message || 'Failed to create class.', 'warning');
+      for (const section of sections) {
+        const className = classSectionMode === 'single' ? baseName : `${baseName}${section}`;
+        try {
+          await adminApi.createClass({ ...classFormData, name: className, section });
+          created.push(className);
+        } catch (err) {
+          failed.push(err.message || className);
+        }
+      }
+      if (showToast) {
+        if (created.length === 1) showToast(`Class ${created[0]} created.`, 'success');
+        else if (created.length > 1) showToast(`${created.length} classes created: ${created.join(', ')}.`, 'success');
+        if (failed.length) showToast(failed.join(' • '), 'warning');
+      }
+      if (created.length > 0) {
+        setShowAddClassModal(false);
+        fetchClasses();
+      }
     } finally {
       setClassSubmitting(false);
     }
@@ -582,7 +831,7 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
     setSubjectFormData({
       code: '',
       name: '',
-      department: 'Computer Science & Engineering',
+      department: departments[0]?.name || '',
     });
     setShowAddSubjectModal(true);
   };
@@ -592,7 +841,7 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
     setSubjectFormData({
       code: subj.code || '',
       name: subj.name || '',
-      department: subj.department || 'Computer Science & Engineering',
+      department: subj.department || departments[0]?.name || '',
     });
     setShowEditSubjectModal(true);
   };
@@ -641,12 +890,319 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
     }
   };
 
+  // ================= DEPARTMENT HANDLERS =================
+  const handleOpenAddDepartment = () => {
+    setDepartmentFormData({ code: '', name: '' });
+    setShowAddDepartmentModal(true);
+  };
+
+  const handleOpenEditDepartment = (department) => {
+    setEditingDepartmentId(department.id);
+    setDepartmentFormData({ code: department.code || '', name: department.name || '' });
+    setShowEditDepartmentModal(true);
+  };
+
+  const handleCreateDepartment = async (e) => {
+    e.preventDefault();
+    if (!departmentFormData.code.trim() || !departmentFormData.name.trim()) return;
+    setDepartmentSubmitting(true);
+    try {
+      await academicsApi.createDepartment({
+        code: departmentFormData.code.trim().toUpperCase(),
+        name: departmentFormData.name.trim(),
+      });
+      setShowAddDepartmentModal(false);
+      fetchDepartments();
+      if (showToast) showToast(`Department ${departmentFormData.name} added.`, 'success');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Failed to add department.', 'warning');
+    } finally {
+      setDepartmentSubmitting(false);
+    }
+  };
+
+  const handleUpdateDepartment = async (e) => {
+    e.preventDefault();
+    if (!editingDepartmentId || !departmentFormData.name.trim()) return;
+    setDepartmentSubmitting(true);
+    try {
+      await academicsApi.updateDepartment(editingDepartmentId, {
+        code: departmentFormData.code.trim().toUpperCase(),
+        name: departmentFormData.name.trim(),
+      });
+      setShowEditDepartmentModal(false);
+      setEditingDepartmentId(null);
+      fetchDepartments();
+      fetchStudents();
+      fetchTeachers();
+      fetchClasses();
+      fetchSubjects();
+      if (showToast) showToast('Department updated across all records.', 'success');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Failed to update department.', 'warning');
+    } finally {
+      setDepartmentSubmitting(false);
+    }
+  };
+
+  const handleDeleteDepartment = async (department) => {
+    if (!confirm(`Delete department ${department.name} (${department.code})?`)) return;
+    try {
+      await academicsApi.deleteDepartment(department.id);
+      fetchDepartments();
+      if (showToast) showToast(`Deleted department: ${department.name}`, 'info');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Failed to delete department.', 'warning');
+    }
+  };
+
+  // ================= BATCH HANDLERS =================
+  const handleOpenAddBatch = () => {
+    setBatchFormData({ name: '', department_id: departments[0]?.id || '' });
+    setBatchSectionCount(0);
+    setBatchNames(['']);
+    setShowAddBatchModal(true);
+  };
+
+  const handleOpenEditBatch = (batch) => {
+    setEditingBatchId(batch.id);
+    setBatchFormData({ name: batch.name || '', department_id: batch.department_id || '' });
+    setShowEditBatchModal(true);
+  };
+
+  const handleCreateBatch = async (e) => {
+    e.preventDefault();
+    if (!batchFormData.name.trim() || !batchFormData.department_id) return;
+    const departmentId = Number(batchFormData.department_id);
+    // No sections -> one batch named by the year range; N sections -> N typed names.
+    const names = batchSectionCount > 0
+      ? batchNames.map((value) => value.trim()).filter(Boolean)
+      : [batchFormData.name.trim()];
+    if (names.length === 0) return;
+    setBatchSubmitting(true);
+    try {
+      const created = [];
+      const failed = [];
+      for (const name of names) {
+        try {
+          await academicsApi.createBatch({ name, department_id: departmentId });
+          created.push(name);
+        } catch (err) {
+          failed.push(err.message || name);
+        }
+      }
+      setShowAddBatchModal(false);
+      fetchBatches();
+      if (showToast) {
+        if (created.length) showToast(`${created.length === 1 ? `Batch ${created[0]}` : `${created.length} batches`} added.`, 'success');
+        if (failed.length) showToast(failed.join(' • '), 'warning');
+      }
+    } finally {
+      setBatchSubmitting(false);
+    }
+  };
+
+  const handleUpdateBatch = async (e) => {
+    e.preventDefault();
+    if (!editingBatchId || !batchFormData.name.trim()) return;
+    setBatchSubmitting(true);
+    try {
+      await academicsApi.updateBatch(editingBatchId, {
+        name: batchFormData.name.trim(),
+        department_id: Number(batchFormData.department_id),
+      });
+      setShowEditBatchModal(false);
+      setEditingBatchId(null);
+      fetchBatches();
+      fetchClasses();
+      if (showToast) showToast('Batch updated.', 'success');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Failed to update batch.', 'warning');
+    } finally {
+      setBatchSubmitting(false);
+    }
+  };
+
+  const handleDeleteBatch = async (batch) => {
+    if (!confirm(`Delete batch ${batch.name}? Classes and students in it will keep their records but lose the batch link.`)) return;
+    try {
+      await academicsApi.deleteBatch(batch.id);
+      fetchBatches();
+      fetchClasses();
+      if (showToast) showToast(`Deleted batch: ${batch.name}`, 'info');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Failed to delete batch.', 'warning');
+    }
+  };
+
+  // ================= TEACHER ASSIGNMENT HANDLERS =================
+  const toggleAssignmentSubject = (subjectId) => {
+    setAssignmentFormData((prev) => ({
+      ...prev,
+      subject_ids: prev.subject_ids.includes(subjectId)
+        ? prev.subject_ids.filter((id) => id !== subjectId)
+        : [...prev.subject_ids, subjectId],
+    }));
+  };
+
+  const handleAssignTeacher = async (e) => {
+    e.preventDefault();
+    if (!assignmentFormData.teacher_id || !assignmentFormData.class_id || assignmentFormData.subject_ids.length === 0) {
+      if (showToast) showToast('Pick a teacher, a class and at least one subject.', 'warning');
+      return;
+    }
+    setAssignmentSubmitting(true);
+    try {
+      await academicsApi.assign({
+        teacher_id: assignmentFormData.teacher_id,
+        class_id: Number(assignmentFormData.class_id),
+        subject_ids: assignmentFormData.subject_ids,
+      });
+      setAssignmentFormData({ teacher_id: '', class_id: '', subject_ids: [] });
+      fetchAssignments();
+      if (showToast) showToast('Class assigned to faculty. They can now see it in their portal.', 'success');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Failed to assign class.', 'warning');
+    } finally {
+      setAssignmentSubmitting(false);
+    }
+  };
+
+  const handleDeleteAssignment = async (assignment) => {
+    if (!confirm(`Remove ${assignment.subject_name} in ${assignment.class_name} from ${assignment.teacher_name}?`)) return;
+    try {
+      await academicsApi.deleteAssignment(assignment.id);
+      fetchAssignments();
+      if (showToast) showToast('Assignment removed.', 'info');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Failed to remove assignment.', 'warning');
+    }
+  };
+
+  // ================= STUDENT REGISTRATION HANDLERS =================
+  const registrationUrl = (link) => `${window.location.origin}${link.path}`;
+
+  const copyRegistrationUrl = async (link) => {
+    try {
+      await navigator.clipboard.writeText(registrationUrl(link));
+      setCopiedLinkId(link.id);
+      setTimeout(() => setCopiedLinkId(null), 2000);
+      if (showToast) showToast('Registration link copied to clipboard.', 'success');
+    } catch {
+      if (showToast) showToast('Copy failed. Select the link text and copy it manually.', 'warning');
+    }
+  };
+
+  const handleCreateRegistrationLink = async (e) => {
+    e.preventDefault();
+    setRegistrationSubmitting(true);
+    try {
+      await academicsApi.createRegistrationLink({ label: registrationLabel.trim() || 'Student registration' });
+      setRegistrationLabel('');
+      await fetchRegistrationData();
+      if (showToast) showToast('Registration link created. Copy it and share it with applicants.', 'success');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Could not create the registration link.', 'warning');
+    } finally {
+      setRegistrationSubmitting(false);
+    }
+  };
+
+  const handleToggleRegistrationLink = async (link) => {
+    try {
+      await academicsApi.updateRegistrationLink(link.id, { is_active: !link.is_active });
+      await fetchRegistrationData();
+      if (showToast) showToast(link.is_active ? 'Link closed. Students can no longer submit.' : 'Link reopened for submissions.', 'info');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Could not update the link.', 'warning');
+    }
+  };
+
+  const handleDeleteRegistrationLink = async (link) => {
+    if (!confirm(`Delete the link "${link.label || 'Student registration'}"? Its applications are removed too.`)) return;
+    try {
+      await academicsApi.deleteRegistrationLink(link.id);
+      await fetchRegistrationData();
+      if (showToast) showToast('Registration link deleted.', 'info');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Could not delete the link.', 'warning');
+    }
+  };
+
+  const handleApproveRegistration = async (request) => {
+    if (!confirm(`Approve ${request.name}? This creates their login (ID ${request.registration_number}) and student record.`)) return;
+    setDecidingId(request.id);
+    try {
+      await academicsApi.approveRegistration(request.id);
+      await fetchRegistrationData();
+      fetchStudents();
+      if (showToast) showToast(`${request.name} approved and enrolled as ${request.registration_number}.`, 'success');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Could not approve this application.', 'warning');
+    } finally {
+      setDecidingId(null);
+    }
+  };
+
+  const handleOpenReject = (request) => {
+    setRejectingRequest(request);
+    setRejectReason('');
+  };
+
+  const handleRejectRegistration = async (e) => {
+    e.preventDefault();
+    if (!rejectingRequest || !rejectReason.trim()) return;
+    setDecidingId(rejectingRequest.id);
+    try {
+      await academicsApi.rejectRegistration(rejectingRequest.id, rejectReason.trim());
+      setRejectingRequest(null);
+      setRejectReason('');
+      await fetchRegistrationData();
+      if (showToast) showToast('Application rejected. The reason is saved for the student and the office.', 'info');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Could not reject this application.', 'warning');
+    } finally {
+      setDecidingId(null);
+    }
+  };
+
+  // ================= INSTITUTION LOGO HANDLERS =================
+  const handleLogoUpload = async (file) => {
+    if (!file) return;
+    setLogoUploading(true);
+    try {
+      const res = await adminApi.uploadLogo(file);
+      if (res) setSettingsData((prev) => ({ ...prev, ...res }));
+      if (onInstitutionUpdated) onInstitutionUpdated();
+      if (showToast) showToast('Institution logo updated.', 'success');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Failed to upload logo.', 'warning');
+    } finally {
+      setLogoUploading(false);
+    }
+  };
+
+  const handleRemoveLogo = async () => {
+    if (!confirm('Remove the institution logo?')) return;
+    setLogoUploading(true);
+    try {
+      const res = await adminApi.deleteLogo();
+      if (res) setSettingsData((prev) => ({ ...prev, ...res }));
+      if (onInstitutionUpdated) onInstitutionUpdated();
+      if (showToast) showToast('Institution logo removed.', 'info');
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Failed to remove logo.', 'warning');
+    } finally {
+      setLogoUploading(false);
+    }
+  };
+
   // ================= ATTENDANCE RECORD HANDLERS =================
   const handleOpenAddAttendance = () => {
     setAttendanceFormData({
       student_id: students[0]?.id || '',
-      class_name: classes[0]?.name || 'CSE-3A',
-      subject_name: subjects[0]?.name || 'Database Systems',
+      class_name: classes[0]?.name || '',
+      subject_name: subjects[0]?.name || '',
       status: 'PRESENT',
       method: 'MANUAL',
       date: new Date().toISOString().split('T')[0],
@@ -776,11 +1332,13 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
         {/* Brand */}
         <div className="flex items-center justify-between h-16 px-6 bg-slate-950 border-b border-slate-800 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-600 rounded-xl text-white shadow-md shadow-blue-600/30">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
+            <img
+              src={assetUrl(institutionInfo?.logo_url || settingsData.logo_url) || '/campussync-logo.svg'}
+              alt={`${institutionInfo?.college_name || settingsData.college_name || 'CampusSync'} logo`}
+              className="h-9 w-9 rounded-xl object-contain bg-white p-0.5 shadow-md shadow-blue-600/30"
+            />
             <div>
-              <h2 className="text-base font-bold text-white tracking-tight leading-none">{settingsData.college_short_name || 'CampusSync'}</h2>
+              <h2 className="text-base font-bold text-white tracking-tight leading-none">{institutionInfo?.college_short_name || settingsData.college_short_name || 'CampusSync'}</h2>
               <span className="text-[10px] font-semibold text-blue-400 uppercase tracking-wider">Admin Console</span>
             </div>
           </div>
@@ -857,6 +1415,46 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
           </button>
 
           <button
+            onClick={() => { setActiveTab('departments'); setMobileMenuOpen(false); }}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              activeTab === 'departments' ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 font-semibold' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200'
+            }`}
+          >
+            <Building2 className="w-4 h-4" />
+            Departments
+          </button>
+
+          <button
+            onClick={() => { setActiveTab('batches'); setMobileMenuOpen(false); }}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              activeTab === 'batches' ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 font-semibold' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200'
+            }`}
+          >
+            <CalendarRange className="w-4 h-4" />
+            Admission Batches
+          </button>
+
+          <button
+            onClick={() => { setActiveTab('assignments'); setMobileMenuOpen(false); }}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              activeTab === 'assignments' ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 font-semibold' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200'
+            }`}
+          >
+            <Link2 className="w-4 h-4" />
+            Assign Classes
+          </button>
+
+          <button
+            onClick={() => { setActiveTab('registration'); setMobileMenuOpen(false); }}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              activeTab === 'registration' ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 font-semibold' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200'
+            }`}
+          >
+            <UserPlus className="w-4 h-4" />
+            Student Registration
+          </button>
+
+          <button
             onClick={() => { setActiveTab('attendance'); setMobileMenuOpen(false); }}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
               activeTab === 'attendance' ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 font-semibold' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200'
@@ -917,6 +1515,10 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
               {activeTab === 'teachers' && 'Faculty Members & Allocations'}
               {activeTab === 'classes' && 'Academic Classes & Sections'}
               {activeTab === 'subjects' && 'Course Subjects & Curriculum'}
+              {activeTab === 'departments' && 'Departments & Academic Units'}
+              {activeTab === 'batches' && 'Admission Batches'}
+              {activeTab === 'assignments' && 'Assign Classes to Faculty'}
+              {activeTab === 'registration' && 'Student Registration & Approvals'}
               {activeTab === 'attendance' && 'Attendance Database & Records'}
               {activeTab === 'reports' && 'Institutional Reports & Analytics'}
               {activeTab === 'settings' && 'Institutional System Configuration'}
@@ -924,6 +1526,17 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
           </div>
 
           <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2.5 border-r border-slate-200 pr-3 min-w-0">
+              <img
+                src={assetUrl(institutionInfo?.logo_url || settingsData.logo_url) || '/campussync-logo.svg'}
+                alt="Institution logo"
+                className="h-9 w-9 rounded-lg object-contain"
+              />
+              <div className="leading-tight min-w-0">
+                <p className="text-sm font-bold text-slate-900 max-w-[160px] sm:max-w-[220px] truncate">{institutionInfo?.college_name || settingsData.college_name || 'CampusSync University'}</p>
+                <p className="text-[11px] text-slate-400">Administration</p>
+              </div>
+            </div>
             <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
               Database Online & Synced
@@ -998,7 +1611,7 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                   <div>
                     <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Campus Attendance</p>
                     <h3 className="text-2xl font-bold text-slate-900 mt-1">
-                      {dashboardLoading ? <Loader2 className="w-5 h-5 animate-spin text-amber-600" /> : `${dashboardData?.overall_attendance ?? 88.5}%`}
+                      {dashboardLoading ? <Loader2 className="w-5 h-5 animate-spin text-amber-600" /> : `${dashboardData?.overall_attendance !== undefined ? dashboardData.overall_attendance : '—'}%`}
                     </h3>
                     <p className="text-xs text-emerald-600 font-semibold mt-1">Meeting 75% requirement</p>
                   </div>
@@ -1035,6 +1648,18 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                     className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-colors"
                   >
                     <Plus className="w-4 h-4" /> Add Course Subject
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('assignments'); }}
+                    className="flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-colors"
+                  >
+                    <Link2 className="w-4 h-4" /> Assign Class to Faculty
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('registration'); }}
+                    className="flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-colors"
+                  >
+                    <UserPlus className="w-4 h-4" /> Student Registration Link
                   </button>
                   <button
                     onClick={() => { setActiveTab('attendance'); handleOpenAddAttendance(); }}
@@ -1091,7 +1716,9 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                       <div key={t.id} className="p-3 px-4 flex items-center justify-between hover:bg-slate-50">
                         <div>
                           <p className="text-sm font-semibold text-slate-800">{t.name}</p>
-                          <p className="text-xs text-slate-400">{t.department}</p>
+                          <p className="text-xs text-slate-400">
+                            {(Array.isArray(t.departments) && t.departments.length > 0 ? t.departments : [t.department]).filter(Boolean).join(', ')}
+                          </p>
                         </div>
                         <span className="text-xs text-slate-500 font-mono">{t.id}</span>
                       </div>
@@ -1166,11 +1793,17 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                             <td className="py-3 px-4">
                               <p className="font-semibold text-slate-900">{s.name}</p>
                               <p className="text-xs text-slate-400">{s.email}</p>
+                              {s.roll_number && (
+                                <p className="text-[11px] text-slate-400 font-mono">Roll {s.roll_number}</p>
+                              )}
                             </td>
                             <td className="py-3 px-4">
                               <span className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700">
                                 {s.class_name || `${s.year} - ${s.section}`}
                               </span>
+                              {s.batch_name && (
+                                <p className="text-[11px] text-slate-400 mt-1">Batch {s.batch_name}</p>
+                              )}
                             </td>
                             <td className="py-3 px-4 text-xs text-slate-600">{s.department}</td>
                             <td className="py-3 px-4 text-xs text-slate-600 font-mono">{s.phone || '—'}</td>
@@ -1260,7 +1893,9 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                               <p className="font-semibold text-slate-900">{t.name}</p>
                               <p className="text-xs text-slate-400">{t.email}</p>
                             </td>
-                            <td className="py-3 px-4 text-xs text-slate-700 font-medium">{t.department}</td>
+                            <td className="py-3 px-4 text-xs text-slate-700 font-medium">
+                              {(Array.isArray(t.departments) && t.departments.length > 0 ? t.departments : [t.department]).filter(Boolean).join(', ')}
+                            </td>
                             <td className="py-3 px-4 text-xs text-slate-600 font-mono">{t.phone || '—'}</td>
                             <td className="py-3 px-4">
                               <div className="flex flex-wrap gap-1">
@@ -1341,7 +1976,7 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                     </div>
                     <p className="text-xs text-slate-500 mb-4">{c.department}</p>
                     <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-xs">
-                      <span className="text-slate-500 font-medium">Year: {c.year} • Sec: {c.section}</span>
+                      <span className="text-slate-500 font-medium">Batch: {c.batch_name || c.year || '—'}{c.section ? ` • Sec: ${c.section}` : ''}</span>
                       <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
                         {c.total_students ?? 0} Students
                       </span>
@@ -1396,6 +2031,524 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                     <p className="text-xs text-slate-500">{s.department}</p>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB: DEPARTMENTS */}
+          {/* ========================================================================= */}
+          {activeTab === 'departments' && (
+            <div className="space-y-4">
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">Academic Departments</h3>
+                  <p className="text-xs text-slate-400">Students, faculty, classes and subjects pick their department from this list.</p>
+                </div>
+                <button
+                  onClick={handleOpenAddDepartment}
+                  className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-colors"
+                >
+                  <Plus className="w-4 h-4" /> Add Department
+                </button>
+              </div>
+
+              {departmentsLoading ? (
+                <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-slate-400">
+                  <Loader2 className="w-6 h-6 animate-spin mx-auto text-blue-600 mb-2" />
+                  Loading departments...
+                </div>
+              ) : departments.length === 0 ? (
+                <div className="bg-white p-10 rounded-2xl border border-slate-200 text-center">
+                  <Building2 className="w-10 h-10 mx-auto text-slate-300 mb-3" />
+                  <p className="font-bold text-slate-800">No departments yet</p>
+                  <p className="text-xs text-slate-500 mt-1">Add CSE, ECE and the rest of your academic units to start enrolling students.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {departments.map((department) => (
+                    <div key={department.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                          {department.code}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => handleOpenEditDepartment(department)} className="p-1 text-slate-400 hover:text-blue-600 rounded" title="Edit department">
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => handleDeleteDepartment(department)} className="p-1 text-slate-400 hover:text-rose-600 rounded" title="Delete department">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <h4 className="text-base font-bold text-slate-900 mb-3 leading-snug">{department.name}</h4>
+                      <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-xs">
+                        <span className="text-slate-500 font-medium">{department.batch_count ?? 0} batches</span>
+                        <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
+                          {students.filter((student) => student.department === department.name).length} students
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB: ADMISSION BATCHES */}
+          {/* ========================================================================= */}
+          {activeTab === 'batches' && (
+            <div className="space-y-4">
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">Admission Batches</h3>
+                  <p className="text-xs text-slate-400">Year ranges per department, e.g. CSE 2024-2028. Classes and students can be linked to a batch.</p>
+                </div>
+                <button
+                  onClick={handleOpenAddBatch}
+                  disabled={departments.length === 0}
+                  className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-colors disabled:opacity-60"
+                >
+                  <Plus className="w-4 h-4" /> Add Batch
+                </button>
+              </div>
+
+              {batchesLoading ? (
+                <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-slate-400">
+                  <Loader2 className="w-6 h-6 animate-spin mx-auto text-emerald-600 mb-2" />
+                  Loading batches...
+                </div>
+              ) : batches.length === 0 ? (
+                <div className="bg-white p-10 rounded-2xl border border-slate-200 text-center">
+                  <CalendarRange className="w-10 h-10 mx-auto text-slate-300 mb-3" />
+                  <p className="font-bold text-slate-800">No batches yet</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {departments.length === 0 ? 'Add a department first, then create its admission batches.' : 'Create batches like 2024-2028 for each department.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {batches.map((batch) => (
+                    <div key={batch.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-black text-slate-900 tracking-tight">{batch.name}</span>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => handleOpenEditBatch(batch)} className="p-1 text-slate-400 hover:text-emerald-600 rounded" title="Edit batch">
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => handleDeleteBatch(batch)} className="p-1 text-slate-400 hover:text-rose-600 rounded" title="Delete batch">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-500 mb-3">{batch.department_name} {batch.department_code ? `(${batch.department_code})` : ''}</p>
+                      <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-xs">
+                        <span className="text-slate-500 font-medium">{batch.class_count ?? 0} classes</span>
+                        <span className="font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                          {students.filter((student) => String(student.batch_id) === String(batch.id)).length} students
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB: ASSIGN CLASSES TO FACULTY */}
+          {/* ========================================================================= */}
+          {activeTab === 'assignments' && (
+            <div className="space-y-6">
+              <form onSubmit={handleAssignTeacher} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">Assign a Class to a Teacher</h3>
+                  <p className="text-xs text-slate-400">Pick a faculty member, one of their classes and the subjects they teach there. They immediately see the class and can announce to it.</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Faculty Member *</label>
+                    <select
+                      value={assignmentFormData.teacher_id}
+                      onChange={(e) => setAssignmentFormData({ ...assignmentFormData, teacher_id: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      <option value="">Choose a teacher</option>
+                      {teachers.map((teacher) => (
+                        <option key={teacher.id} value={teacher.id}>
+                          {teacher.name} ({teacher.id}){Array.isArray(teacher.departments) && teacher.departments.length > 0 ? ` · ${teacher.departments.join(', ')}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Class Section *</label>
+                    <select
+                      value={assignmentFormData.class_id}
+                      onChange={(e) => setAssignmentFormData({ ...assignmentFormData, class_id: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      <option value="">Choose a class</option>
+                      {classes.map((cls) => (
+                        <option key={cls.id} value={cls.id}>{cls.name} {cls.batch_name ? `· ${cls.batch_name}` : ''}{cls.section ? ` · Section ${cls.section}` : ''}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">Subjects Taught in This Class *</label>
+                  {subjects.length === 0 ? (
+                    <p className="text-xs text-slate-400">Add course subjects first.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {subjects.map((subject) => {
+                        const isSelected = assignmentFormData.subject_ids.includes(subject.id);
+                        return (
+                          <button
+                            type="button"
+                            key={subject.id}
+                            onClick={() => toggleAssignmentSubject(subject.id)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all border flex items-center gap-1 ${
+                              isSelected ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm' : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                            }`}
+                          >
+                            {isSelected && <Check className="w-3 h-3" />}
+                            {subject.name} ({subject.code})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-end pt-2 border-t border-slate-100">
+                  <button
+                    type="submit"
+                    disabled={assignmentSubmitting}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-sm disabled:opacity-70"
+                  >
+                    {assignmentSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
+                    Assign to Faculty
+                  </button>
+                </div>
+              </form>
+
+              {assignmentsError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" /> {assignmentsError}
+                </div>
+              )}
+
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <h4 className="text-sm font-bold text-slate-900">Current Assignments ({assignments.length})</h4>
+                  <select
+                    value={assignmentFilterTeacher}
+                    onChange={(e) => setAssignmentFilterTeacher(e.target.value)}
+                    className="px-3 py-2 border border-slate-300 rounded-xl text-sm bg-white text-slate-700"
+                  >
+                    <option value="All">All faculty</option>
+                    {teachers.map((teacher) => (
+                      <option key={teacher.id} value={teacher.id}>{teacher.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                        <th className="py-3 px-4">Faculty</th>
+                        <th className="py-3 px-4">Class</th>
+                        <th className="py-3 px-4">Subject</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-sm">
+                      {assignmentsLoading ? (
+                        <tr>
+                          <td colSpan="4" className="py-8 text-center text-slate-400">
+                            <Loader2 className="w-5 h-5 animate-spin mx-auto text-indigo-600 mb-2" />
+                            Loading assignments...
+                          </td>
+                        </tr>
+                      ) : assignments.filter((row) => assignmentFilterTeacher === 'All' || row.teacher_id === assignmentFilterTeacher).length === 0 ? (
+                        <tr>
+                          <td colSpan="4" className="py-8 text-center text-slate-400">
+                            No class assignments yet. Use the form above to assign a class.
+                          </td>
+                        </tr>
+                      ) : (
+                        assignments
+                          .filter((row) => assignmentFilterTeacher === 'All' || row.teacher_id === assignmentFilterTeacher)
+                          .map((row) => (
+                            <tr key={row.id} className="hover:bg-slate-50/80 transition-colors">
+                              <td className="py-3 px-4">
+                                <p className="font-semibold text-slate-900">{row.teacher_name}</p>
+                                <p className="text-xs text-slate-400 font-mono">{row.teacher_id}</p>
+                              </td>
+                              <td className="py-3 px-4">
+                                <span className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700">{row.class_name}</span>
+                              </td>
+                              <td className="py-3 px-4 text-xs text-slate-700">
+                                {row.subject_name}{row.subject_code ? ` (${row.subject_code})` : ''}
+                              </td>
+                              <td className="py-3 px-4 text-right">
+                                <button
+                                  onClick={() => handleDeleteAssignment(row)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors inline-flex items-center"
+                                  title="Remove assignment"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB: STUDENT REGISTRATION & APPROVALS */}
+          {/* ========================================================================= */}
+          {activeTab === 'registration' && (
+            <div className="space-y-6">
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">Student Registration Link</h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Generate a link and share it with applicants. They fill their name, batch, section, college email,
+                    registration number, roll number and the password they want. Applicants only see the departments,
+                    batches and sections you created here. Their registration number becomes their login ID.
+                  </p>
+                </div>
+                <form onSubmit={handleCreateRegistrationLink} className="flex flex-col sm:flex-row gap-3">
+                  <input
+                    value={registrationLabel}
+                    onChange={(e) => setRegistrationLabel(e.target.value)}
+                    maxLength={120}
+                    placeholder="Link name, e.g. B.Tech 2026 admissions"
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={registrationSubmitting}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold shadow-sm disabled:opacity-70"
+                  >
+                    {registrationSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
+                    Generate link
+                  </button>
+                </form>
+                <p className="text-[11px] text-slate-400">
+                  No email is sent by CampusSync. A rejection reason is saved and shown to the student on the same link,
+                  and to office staff here.
+                </p>
+              </div>
+
+              {registrationError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" /> {registrationError}
+                </div>
+              )}
+
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
+                  <h4 className="text-sm font-bold text-slate-900">Registration Links ({registrationLinks.length})</h4>
+                  <button
+                    type="button"
+                    onClick={fetchRegistrationData}
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${registrationLoading ? 'animate-spin' : ''}`} /> Refresh
+                  </button>
+                </div>
+                {registrationLoading && registrationLinks.length === 0 ? (
+                  <div className="p-8 text-center text-slate-400">
+                    <Loader2 className="w-5 h-5 animate-spin mx-auto text-blue-600 mb-2" />
+                    Loading links...
+                  </div>
+                ) : registrationLinks.length === 0 ? (
+                  <div className="p-8 text-center text-slate-400 text-xs">
+                    No registration link yet. Generate one above and share the URL.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {registrationLinks.map((link) => (
+                      <div key={link.id} className="p-4 flex flex-col lg:flex-row lg:items-center gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm font-semibold text-slate-900">{link.label || 'Student registration'}</p>
+                            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${link.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                              {link.is_active ? 'Open' : 'Closed'}
+                            </span>
+                            <span className="text-[11px] text-slate-400">{link.request_count} applications · {link.pending_count} pending</span>
+                          </div>
+                          <code className="block text-[11px] font-mono text-slate-500 truncate mt-1">{registrationUrl(link)}</code>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => copyRegistrationUrl(link)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 text-xs font-semibold hover:bg-blue-100"
+                          >
+                            <Copy className="w-3.5 h-3.5" /> {copiedLinkId === link.id ? 'Copied' : 'Copy'}
+                          </button>
+                          <a
+                            href={link.path}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-semibold hover:bg-slate-200"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" /> Open
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleRegistrationLink(link)}
+                            className="px-2.5 py-1.5 rounded-lg bg-amber-50 text-amber-700 text-xs font-semibold hover:bg-amber-100"
+                          >
+                            {link.is_active ? 'Close' : 'Reopen'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRegistrationLink(link)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded"
+                            title="Delete link"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">Applications ({registrationRequests.length})</h4>
+                    <p className="text-xs text-slate-400">Approve to create the student login, or reject with a reason.</p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {['pending', 'approved', 'rejected', 'all'].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setRegistrationFilter(value)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize ${
+                          registrationFilter === value ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {value}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                        <th className="py-3 px-4">Applicant</th>
+                        <th className="py-3 px-4">IDs</th>
+                        <th className="py-3 px-4">Batch & Section</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4 text-right">Decision</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-sm">
+                      {(() => {
+                        const rows = registrationRequests.filter((item) => registrationFilter === 'all' || item.status === registrationFilter);
+                        if (registrationLoading && rows.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan="5" className="py-8 text-center text-slate-400">
+                                <Loader2 className="w-5 h-5 animate-spin mx-auto text-blue-600 mb-2" />
+                                Loading applications...
+                              </td>
+                            </tr>
+                          );
+                        }
+                        if (rows.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan="5" className="py-8 text-center text-slate-400">
+                                No {registrationFilter === 'all' ? '' : registrationFilter} applications.
+                              </td>
+                            </tr>
+                          );
+                        }
+                        return rows.map((item) => (
+                          <tr key={item.id} className="hover:bg-slate-50/80 transition-colors align-top">
+                            <td className="py-3 px-4">
+                              <p className="font-semibold text-slate-900">{item.name}</p>
+                              <p className="text-xs text-slate-400">{item.email}</p>
+                              <p className="text-[10px] text-slate-300 font-mono mt-0.5">{item.id.slice(0, 8)}</p>
+                            </td>
+                            <td className="py-3 px-4 text-xs">
+                              <p className="font-mono text-slate-700">{item.registration_number}</p>
+                              <p className="text-slate-400 font-mono">Roll {item.roll_number}</p>
+                            </td>
+                            <td className="py-3 px-4 text-xs">
+                              <p className="text-slate-700">{item.batch_name || '—'}</p>
+                              <p className="text-slate-400">{item.department}{item.section ? ` · Sec ${item.section}` : ''}</p>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`inline-flex items-center gap-1 text-[11px] font-bold uppercase px-2 py-0.5 rounded ${
+                                item.status === 'approved' ? 'bg-emerald-50 text-emerald-700' :
+                                item.status === 'rejected' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'
+                              }`}>
+                                {item.status === 'approved' && <CheckCircle2 className="w-3 h-3" />}
+                                {item.status === 'rejected' && <XCircle className="w-3 h-3" />}
+                                {item.status === 'pending' && <Clock className="w-3 h-3" />}
+                                {item.status}
+                              </span>
+                              {item.status === 'rejected' && item.decision_reason && (
+                                <p className="text-[11px] text-rose-700 mt-1 max-w-[16rem] whitespace-pre-line">{item.decision_reason}</p>
+                              )}
+                              {item.status === 'approved' && item.student_id && (
+                                <p className="text-[11px] text-emerald-700 mt-1 font-mono">{item.student_id}</p>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              {item.status === 'pending' ? (
+                                <div className="inline-flex gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApproveRegistration(item)}
+                                    disabled={decidingId === item.id}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-60"
+                                  >
+                                    {decidingId === item.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                                    Approve
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenReject(item)}
+                                    disabled={decidingId === item.id}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-50 text-rose-700 text-xs font-semibold hover:bg-rose-100 disabled:opacity-60"
+                                  >
+                                    <XCircle className="w-3.5 h-3.5" />
+                                    Reject
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-[11px] text-slate-400">
+                                  {item.decided_at ? new Date(item.decided_at).toLocaleDateString() : '—'}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ));
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
@@ -1599,7 +2752,54 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
           {/* ========================================================================= */}
           {activeTab === 'settings' && (
             <div className="space-y-6 max-w-5xl">
-              
+
+              {/* Institution Logo */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                  <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl border border-indigo-200">
+                    <ImageIcon className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">Institution Logo</h3>
+                    <p className="text-xs text-slate-500">Shown in the header of every dashboard, on profile pages and on the sign-in screen</p>
+                  </div>
+                </div>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                  <div className="w-20 h-20 rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0">
+                    {settingsData.logo_url ? (
+                      <img src={assetUrl(settingsData.logo_url)} alt="Institution logo" className="max-h-full max-w-full object-contain" />
+                    ) : (
+                      <ImageIcon className="w-7 h-7 text-slate-300" />
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors">
+                        {logoUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                        {logoUploading ? 'Uploading…' : (settingsData.logo_url ? 'Replace logo' : 'Upload logo')}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          className="hidden"
+                          onChange={(e) => handleLogoUpload(e.target.files?.[0])}
+                        />
+                      </label>
+                      {settingsData.logo_url && (
+                        <button
+                          type="button"
+                          onClick={handleRemoveLogo}
+                          disabled={logoUploading}
+                          className="px-3 py-2 text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors disabled:opacity-60"
+                        >
+                          Remove logo
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-400">PNG, JPEG or WebP · up to 3 MB · square images look best</p>
+                  </div>
+                </div>
+              </div>
+
               {/* Institution Identity & White-Label Branding */}
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
@@ -1931,6 +3131,17 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                 </div>
               </div>
 
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Roll Number</label>
+                <input
+                  type="text"
+                  value={studentFormData.roll_number || ''}
+                  onChange={(e) => setStudentFormData({ ...studentFormData, roll_number: e.target.value.toUpperCase() })}
+                  placeholder="e.g. 24CSE015"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Email Address *</label>
@@ -1959,6 +3170,32 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
               </div>
 
               <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Department</label>
+                  <select
+                    value={studentFormData.department || ''}
+                    onChange={(e) => setStudentFormData({ ...studentFormData, department: e.target.value, batch_id: null })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  >
+                    {departmentNames.length === 0 && <option value="">No departments yet</option>}
+                    {departmentNames.map(name => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Batch</label>
+                  <select
+                    value={studentFormData.batch_id ?? ''}
+                    onChange={(e) => setStudentFormData({ ...studentFormData, batch_id: e.target.value ? Number(e.target.value) : null })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  >
+                    <option value="">No batch</option>
+                    {batchesForDepartment(studentFormData.department).map(batch => (
+                      <option key={batch.id} value={batch.id}>{batch.name}</option>
+                    ))}
+                  </select>
+                </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Class Section</label>
                   <select
@@ -2020,6 +3257,17 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
             <p className="text-xs text-slate-500 mb-4">Modify student profile information or reset login password</p>
 
             <form onSubmit={handleUpdateStudent} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Roll Number</label>
+                <input
+                  type="text"
+                  value={studentFormData.roll_number || ''}
+                  onChange={(e) => setStudentFormData({ ...studentFormData, roll_number: e.target.value.toUpperCase() })}
+                  placeholder="e.g. 24CSE015"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Full Name *</label>
@@ -2055,6 +3303,32 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                     placeholder="Leave blank to keep unchanged"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Department</label>
+                  <select
+                    value={studentFormData.department || ''}
+                    onChange={(e) => setStudentFormData({ ...studentFormData, department: e.target.value, batch_id: null })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  >
+                    {departmentNames.length === 0 && <option value="">No departments yet</option>}
+                    {departmentNames.map(name => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Batch</label>
+                  <select
+                    value={studentFormData.batch_id ?? ''}
+                    onChange={(e) => setStudentFormData({ ...studentFormData, batch_id: e.target.value ? Number(e.target.value) : null })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  >
+                    <option value="">No batch</option>
+                    {batchesForDepartment(studentFormData.department).map(batch => (
+                      <option key={batch.id} value={batch.id}>{batch.name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Class Section</label>
@@ -2170,13 +3444,35 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Department</label>
-                <input
-                  type="text"
-                  value={teacherFormData.department}
-                  onChange={(e) => setTeacherFormData({ ...teacherFormData, department: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                />
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Departments (Click to assign one or more)
+                </label>
+                {departmentNames.length === 0 && (
+                  <p className="text-[11px] text-amber-600 mb-2">No departments yet. Add one in the Departments tab.</p>
+                )}
+                <div className="flex flex-wrap gap-1.5">
+                  {departmentNames.map(name => {
+                    const selectedList = teacherFormData.departments || [];
+                    const isSelected = selectedList.some(item => item.toLowerCase() === name.toLowerCase());
+                    const isPrimary = (selectedList[0] || '').toLowerCase() === name.toLowerCase();
+                    return (
+                      <button
+                        type="button"
+                        key={name}
+                        onClick={() => toggleDepartmentInForm(name)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all border flex items-center gap-1 ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm'
+                            : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                        }`}
+                      >
+                        {isSelected && <Check className="w-3 h-3" />}
+                        {name}{isPrimary ? ' · Primary' : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">The first selected department is primary. Add more so this faculty can teach across departments.</p>
               </div>
 
               <div>
@@ -2300,6 +3596,37 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                 </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Departments (Click to assign one or more)
+                  </label>
+                  {departmentNames.length === 0 && (
+                    <p className="text-[11px] text-amber-600 mb-2">No departments yet. Add one in the Departments tab.</p>
+                  )}
+                  <div className="flex flex-wrap gap-1.5">
+                    {departmentNames.map(name => {
+                      const selectedList = teacherFormData.departments || [];
+                      const isSelected = selectedList.some(item => item.toLowerCase() === name.toLowerCase());
+                      const isPrimary = (selectedList[0] || '').toLowerCase() === name.toLowerCase();
+                      return (
+                        <button
+                          type="button"
+                          key={name}
+                          onClick={() => toggleDepartmentInForm(name)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all border flex items-center gap-1 ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white border-indigo-700 shadow-sm'
+                              : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                          }`}
+                        >
+                          {isSelected && <Check className="w-3 h-3" />}
+                          {name}{isPrimary ? ' · Primary' : ''}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">The first selected department is primary. Add more so this faculty can teach across departments.</p>
+                </div>
               </div>
 
               <div>
@@ -2371,42 +3698,122 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
             <button onClick={() => setShowAddClassModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1">
               <X className="w-5 h-5" />
             </button>
-            <h3 className="text-lg font-bold text-slate-900 mb-1">Create Class Section</h3>
-            <p className="text-xs text-slate-500 mb-4">Add a new academic batch</p>
+            <h3 className="text-lg font-bold text-slate-900 mb-1">Add Class</h3>
+            <p className="text-xs text-slate-500 mb-4">Pick a batch, then choose a single class or add section names</p>
 
             <form onSubmit={handleCreateClass} className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Department</label>
+                  <select
+                    value={classFormData.department || ''}
+                    onChange={(e) => setClassFormData({ ...classFormData, department: e.target.value, batch_id: null })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  >
+                    {departmentNames.length === 0 && <option value="">No departments yet</option>}
+                    {departmentNames.map(name => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Batch</label>
+                  <select
+                    value={classFormData.batch_id ?? ''}
+                    onChange={handleClassBatchChange}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  >
+                    <option value="">No batch</option>
+                    {batchesForDepartment(classFormData.department).map(batch => (
+                      <option key={batch.id} value={batch.id}>{batch.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Class Section Name *</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Class name *</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. CSE-3C"
+                  readOnly={classSectionMode === 'single' && Boolean(classFormData.batch_id)}
+                  placeholder="e.g. CSE-3"
                   value={classFormData.name}
                   onChange={(e) => setClassFormData({ ...classFormData, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  className={`w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none ${
+                    classSectionMode === 'single' && classFormData.batch_id ? 'bg-slate-100 text-slate-500' : ''
+                  }`}
                 />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  {classSectionMode === 'single' && classFormData.batch_id
+                    ? 'Uses the batch name, without any section.'
+                    : 'Section names are added after this name.'}
+                </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Section</label>
+                <select
+                  value={classSectionMode}
+                  onChange={(e) => handleClassSectionModeChange(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                >
+                  <option value="single">Single — batch name only, no section</option>
+                  <option value="multiple">Multiple — add section names</option>
+                </select>
+              </div>
+
+              {classSectionMode === 'single' ? (
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Year</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Section name (optional)</label>
                   <input
                     type="text"
-                    value={classFormData.year}
-                    onChange={(e) => setClassFormData({ ...classFormData, year: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Section</label>
-                  <input
-                    type="text"
+                    maxLength={10}
                     value={classFormData.section}
                     onChange={(e) => setClassFormData({ ...classFormData, section: e.target.value })}
+                    placeholder="Leave empty to keep the batch as one class"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
-              </div>
+              ) : (
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Section names *</label>
+                  {classSectionNames.map((sectionName, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        autoFocus={index === classSectionNames.length - 1}
+                        maxLength={10}
+                        value={sectionName}
+                        onChange={(e) => handleSectionNameChange(index, e.target.value)}
+                        placeholder={index === 0 ? 'Section name, e.g. A' : 'Another section name'}
+                        className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeSectionNameInput(index)}
+                        disabled={classSectionNames.length === 1}
+                        title="Remove this section"
+                        className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={addSectionNameInput}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold hover:bg-emerald-100"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Add section
+                  </button>
+                  <p className="text-[11px] text-slate-400">
+                    {classSectionNames.some((name) => name.trim())
+                      ? `Creates: ${classSectionNames.map((name) => name.trim()).filter(Boolean).map((name) => `${classFormData.name.trim()}${name}`).join(' • ')}`
+                      : 'Each section name creates one class from the class name.'}
+                  </p>
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
                 <button type="button" onClick={() => setShowAddClassModal(false)} className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg">
@@ -2447,20 +3854,39 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Year</label>
-                  <input
-                    type="text"
-                    value={classFormData.year}
-                    onChange={(e) => setClassFormData({ ...classFormData, year: e.target.value })}
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Department</label>
+                  <select
+                    value={classFormData.department || ''}
+                    onChange={(e) => setClassFormData({ ...classFormData, department: e.target.value, batch_id: null })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
+                  >
+                    {departmentNames.length === 0 && <option value="">No departments yet</option>}
+                    {departmentNames.map(name => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Section</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Batch</label>
+                  <select
+                    value={classFormData.batch_id ?? ''}
+                    onChange={(e) => setClassFormData({ ...classFormData, batch_id: e.target.value ? Number(e.target.value) : null })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  >
+                    <option value="">No batch</option>
+                    {batchesForDepartment(classFormData.department).map(batch => (
+                      <option key={batch.id} value={batch.id}>{batch.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Section name (optional)</label>
                   <input
                     type="text"
-                    value={classFormData.section}
+                    maxLength={10}
+                    value={classFormData.section || ''}
                     onChange={(e) => setClassFormData({ ...classFormData, section: e.target.value })}
+                    placeholder="Leave empty for the whole batch"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
@@ -2516,6 +3942,20 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                 />
               </div>
 
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Department</label>
+                <select
+                  value={subjectFormData.department || ''}
+                  onChange={(e) => setSubjectFormData({ ...subjectFormData, department: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                >
+                  {departmentNames.length === 0 && <option value="">No departments yet</option>}
+                  {departmentNames.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </div>
+
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
                 <button type="button" onClick={() => setShowAddSubjectModal(false)} className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg">
                   Cancel
@@ -2562,6 +4002,20 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                   onChange={(e) => setSubjectFormData({ ...subjectFormData, name: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Department</label>
+                <select
+                  value={subjectFormData.department || ''}
+                  onChange={(e) => setSubjectFormData({ ...subjectFormData, department: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                >
+                  {departmentNames.length === 0 && <option value="">No departments yet</option>}
+                  {departmentNames.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
               </div>
 
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
@@ -2660,6 +4114,251 @@ export default function Admin({ onLogout, showToast, institutionInfo, onInstitut
                 </button>
                 <button type="submit" disabled={attendanceSubmitting} className="px-4 py-2 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-sm">
                   {attendanceSubmitting ? 'Recording...' : 'Record Attendance'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: ADD / EDIT DEPARTMENT */}
+      {/* ========================================================================= */}
+      {(showAddDepartmentModal || showEditDepartmentModal) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative">
+            <button
+              onClick={() => { setShowAddDepartmentModal(false); setShowEditDepartmentModal(false); }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-lg font-bold text-slate-900 mb-1">
+              {showEditDepartmentModal ? 'Edit Department' : 'Add Department'}
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">Departments appear in every student, faculty, class and subject form.</p>
+
+            <form onSubmit={showEditDepartmentModal ? handleUpdateDepartment : handleCreateDepartment} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Department Code *</label>
+                <input
+                  type="text"
+                  required
+                  maxLength={20}
+                  placeholder="CSE"
+                  value={departmentFormData.code}
+                  onChange={(e) => setDepartmentFormData({ ...departmentFormData, code: e.target.value.toUpperCase() })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Department Name *</label>
+                <input
+                  type="text"
+                  required
+                  maxLength={120}
+                  placeholder="Computer Science & Engineering"
+                  value={departmentFormData.name}
+                  onChange={(e) => setDepartmentFormData({ ...departmentFormData, name: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => { setShowAddDepartmentModal(false); setShowEditDepartmentModal(false); }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={departmentSubmitting}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm disabled:opacity-75"
+                >
+                  {departmentSubmitting ? 'Saving...' : (showEditDepartmentModal ? 'Save Department' : 'Add Department')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: ADD / EDIT BATCH */}
+      {/* ========================================================================= */}
+      {(showAddBatchModal || showEditBatchModal) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative">
+            <button
+              onClick={() => { setShowAddBatchModal(false); setShowEditBatchModal(false); }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-lg font-bold text-slate-900 mb-1">
+              {showEditBatchModal ? 'Edit Batch' : 'Add Admission Batch'}
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">Year range for one department, e.g. 2024-2028.</p>
+
+            <form onSubmit={showEditBatchModal ? handleUpdateBatch : handleCreateBatch} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Department *</label>
+                <select
+                  required
+                  value={batchFormData.department_id}
+                  onChange={(e) => setBatchFormData({ ...batchFormData, department_id: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                >
+                  <option value="">Choose a department</option>
+                  {departments.map((department) => (
+                    <option key={department.id} value={department.id}>{department.name} ({department.code})</option>
+                  ))}
+                </select>
+              </div>
+              {showEditBatchModal ? (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Batch / Year Range *</label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={40}
+                    placeholder="2024-2028"
+                    value={batchFormData.name}
+                    onChange={(e) => setBatchFormData({ ...batchFormData, name: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">The start and end years are read from this name.</p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Batch / Year Range *</label>
+                    <input
+                      type="text"
+                      required
+                      maxLength={40}
+                      placeholder="2024-2028"
+                      value={batchFormData.name}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setBatchFormData({ ...batchFormData, name: value });
+                        if (batchSectionCount > 0) {
+                          setBatchNames(Array.from({ length: batchSectionCount }, (_, index) => `${value} · Sec ${BATCH_NAME_SUFFIXES[index]}`));
+                        }
+                      }}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">The start and end years are read from this name.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Sections</label>
+                    <select
+                      value={batchSectionCount}
+                      onChange={(e) => {
+                        const count = Number(e.target.value);
+                        setBatchSectionCount(count);
+                        setBatchNames(
+                          count > 0
+                            ? Array.from({ length: count }, (_, index) => `${batchFormData.name.trim()} · Sec ${BATCH_NAME_SUFFIXES[index]}`.trim())
+                            : ['']
+                        );
+                      }}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    >
+                      <option value={0}>No sections — one batch named by the year range</option>
+                      {[2, 3, 4, 5, 6].map((count) => (
+                        <option key={count} value={count}>{count} batches — name each one</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {batchSectionCount > 0 && (
+                    <div className="space-y-2 rounded-xl bg-slate-50 border border-slate-200 p-3">
+                      {batchNames.map((value, index) => (
+                        <div key={index}>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Batch {index + 1} name *</label>
+                          <input
+                            type="text"
+                            required
+                            maxLength={40}
+                            value={value}
+                            onChange={(e) => setBatchNames((prev) => prev.map((name, i) => (i === index ? e.target.value : name)))}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+              <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => { setShowAddBatchModal(false); setShowEditBatchModal(false); }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={batchSubmitting}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm disabled:opacity-75"
+                >
+                  {batchSubmitting ? 'Saving...' : (showEditBatchModal ? 'Save Batch' : 'Add Batch')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: REJECT REGISTRATION */}
+      {/* ========================================================================= */}
+      {rejectingRequest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative">
+            <button
+              onClick={() => { setRejectingRequest(null); setRejectReason(''); }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-lg font-bold text-slate-900 mb-1">Reject application</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              {rejectingRequest.name} ({rejectingRequest.registration_number}) will see this reason on the registration
+              link, and office staff see it here.
+            </p>
+
+            <form onSubmit={handleRejectRegistration} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Reason for rejection *</label>
+                <textarea
+                  required
+                  rows={4}
+                  maxLength={500}
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  placeholder="e.g. Registration number does not match the admission list"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => { setRejectingRequest(null); setRejectReason(''); }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={decidingId === rejectingRequest.id || !rejectReason.trim()}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-sm disabled:opacity-60"
+                >
+                  {decidingId === rejectingRequest.id ? 'Saving...' : 'Reject application'}
                 </button>
               </div>
             </form>

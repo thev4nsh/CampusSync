@@ -11,7 +11,7 @@ import {
   X,
   Loader2
 } from 'lucide-react';
-import { authApi, ApiError } from '../api/api';
+import { authApi, assetUrl, ApiError } from '../api/api';
 
 export default function Login({ onLoginSuccess, institutionInfo }) {
   const [identifier, setIdentifier] = useState('');
@@ -107,9 +107,11 @@ export default function Login({ onLoginSuccess, institutionInfo }) {
 
       {/* Brand Header */}
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center z-10">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 text-white shadow-xl shadow-blue-600/30 mb-4 ring-4 ring-blue-500/20">
-          <ShieldCheck className="w-9 h-9" />
-        </div>
+        <img
+          src={institutionInfo?.logo_url ? assetUrl(institutionInfo.logo_url) : '/campussync-logo.svg'}
+          alt={`${institutionInfo?.logo_url ? collegeName : 'CampusSync'} logo`}
+          className={`inline-flex w-16 h-16 rounded-2xl shadow-xl shadow-blue-600/30 mb-4 ring-4 ring-blue-500/20 object-contain ${institutionInfo?.logo_url ? 'bg-white p-1.5' : ''}`}
+        />
         <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
           {collegeName}
         </h1>

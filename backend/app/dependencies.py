@@ -94,7 +94,7 @@ class RoleChecker:
 # Role-specific dependency instances
 require_admin = RoleChecker([UserRole.ADMIN])
 require_teacher = RoleChecker([UserRole.TEACHER, UserRole.ADMIN])
-require_student = RoleChecker([UserRole.STUDENT, UserRole.ADMIN])
+require_student = RoleChecker([UserRole.STUDENT])
 
 
 def get_authenticated_device(

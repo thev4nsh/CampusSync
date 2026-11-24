@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = "gpt-6-luna"
+    OPENAI_MODEL: str = "gpt-4.1"
     OPENAI_SUMMARY_MAX_OUTPUT_TOKENS: int = 1200
     OPENAI_ANSWER_MAX_OUTPUT_TOKENS: int = 900
     AI_DAILY_LIMIT_STUDENT: int = 25

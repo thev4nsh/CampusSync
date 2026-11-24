@@ -28,7 +28,7 @@ from app.schemas import (
     CourseQuestionRequest,
     CourseQuestionResponse,
 )
-from app.services.learning_ai_service import answer_from_material, ensure_ai_configured, summarize_material
+from app.services.learning_ai_service import answer_from_material, summarize_material
 from app.services.ai_usage_service import consume_ai_request, daily_limit_for, used_today
 from app.services.course_file_service import MAX_FILES_PER_POST, MAX_FILE_BYTES, normalize_youtube_url, validate_and_extract
 
@@ -273,6 +273,12 @@ def update_course_material(
     ):
         raise HTTPException(status_code=403, detail="You are not assigned to this course.")
 
+    if len(payload.content.strip()) < 20 and not material.source_url:
+        raise HTTPException(
+            status_code=422,
+            detail="Add at least 20 characters of notes or a YouTube video link.",
+        )
+
     material.title = payload.title.strip()
     material.content = payload.content
     material.content_type = payload.content_type
@@ -299,7 +305,8 @@ def summarize_course_material(
     if material.summary and material.summary_version == material.version:
         summary = material.summary
     else:
-        ensure_ai_configured()
+        # summarize_material raises the 503 itself when the provider is unconfigured,
+        # so a missing key never reaches a billable call.
         consume_ai_request(db, current_user)
         summary = summarize_material(material.content)
         material.summary = summary
@@ -325,7 +332,6 @@ def ask_course_material(
     material = _get_accessible_material(db, material_id, current_user)
     if not material.ai_ready:
         raise HTTPException(status_code=422, detail="This post has no readable text for AI questions yet. Try adding text-based files or notes.")
-    ensure_ai_configured()
     consume_ai_request(db, current_user)
     answer, citations, abstained = answer_from_material(
         material.content, payload.question

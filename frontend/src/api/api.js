@@ -5,7 +5,20 @@
  * Handles JWT authentication tokens, error handling, defensive parsing, and authorization headers.
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const getApiBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_BASE_URL;
+  if (envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')) {
+    return envUrl;
+  }
+  // When accessed via LAN IP / hostname (e.g., from a mobile phone on the same Wi-Fi),
+  // automatically route API requests to the backend on that same host IP.
+  if (typeof window !== 'undefined' && window.location?.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    return `${window.location.protocol}//${window.location.hostname}:8000`;
+  }
+  return envUrl || 'http://localhost:8000';
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 // Storage keys
 const ACCESS_TOKEN_KEY = 'campussync_access_token';
@@ -83,6 +96,19 @@ export const tokenStorage = {
 /**
  * Custom API Error class
  */
+/**
+ * Resolve a server-relative asset path (e.g. '/api/auth/institution/logo?v=1')
+ * into a URL the browser can load.
+ */
+export const assetUrl = (path) => {
+  if (!path) return null;
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${API_BASE_URL.replace(/\/$/, '')}${path.startsWith('/') ? path : '/' + path}`;
+};
+
+/**
+ * Custom API Error class
+ */
 export class ApiError extends Error {
   constructor(message, status = 0, details = null) {
     super(message);
@@ -104,7 +130,9 @@ async function request(endpoint, options = {}) {
     requiresAuth = true,
   } = options;
 
-  let url = `${API_BASE_URL.replace(/\/$/, '')}/${endpoint.replace(/^\//, '')}`;
+  // Every backend route lives under /api, so both '/students/x' and '/api/students/x' work.
+  const path = endpoint.startsWith('/api/') ? endpoint : '/api/' + endpoint.replace(/^\/+/, '');
+  let url = `${API_BASE_URL.replace(/\/$/, '')}${path}`;
 
   if (params && Object.keys(params).length > 0) {
     const query = new URLSearchParams();
@@ -439,6 +467,14 @@ export const teacherApi = {
   },
 
   /**
+   * Attendance for one assigned subject inside one assigned class
+   * Calls: GET /teachers/classes/:classId/subjects/:subjectId/attendance
+   */
+  getSubjectAttendance: async (classId, subjectId) => {
+    return await request(`/teachers/classes/${classId}/subjects/${subjectId}/attendance`);
+  },
+
+  /**
    * Start a live attendance session
    * Calls: POST /attendance/session
    */
@@ -508,10 +544,7 @@ export const teacherApi = {
     const base = API_BASE_URL.replace(/\/$/, '');
     const filename = `Faculty_Attendance_Report_${new Date().toISOString().slice(0, 10)}.csv`;
     
-    const candidateUrls = [
-      `${base}/api/teachers/export/csv`,
-      `${base}/teachers/export/csv`
-    ];
+    const candidateUrls = [`${base}/api/teachers/export/csv`];
 
     let lastError = null;
     for (const u of candidateUrls) {
@@ -725,6 +758,14 @@ export const adminApi = {
   getSettings: async () => {
     return await request('/admin/settings');
   },
+  uploadLogo: async (file) => {
+    const body = new FormData();
+    body.append('logo', file);
+    return await request('/admin/settings/logo', { method: 'POST', body });
+  },
+  deleteLogo: async () => {
+    return await request('/admin/settings/logo', { method: 'DELETE' });
+  },
   updateSettings: async (settingsData) => {
     return await request('/admin/settings', {
       method: 'PUT',
@@ -744,12 +785,7 @@ export const adminApi = {
     const base = API_BASE_URL.replace(/\/$/, '');
     const filename = `CampusSync_Semester_Attendance_${new Date().toISOString().slice(0, 10)}.csv`;
 
-    const candidateUrls = [
-      `${base}/api/admin/reports/export/csv`,
-      `${base}/admin/reports/export/csv`,
-      `${base}/api/reports/export/csv`,
-      `${base}/reports/export/csv`
-    ];
+    const candidateUrls = [`${base}/api/admin/reports/export/csv`];
 
     let lastError = null;
     for (const u of candidateUrls) {
@@ -781,6 +817,37 @@ export const adminApi = {
     }
     throw lastError || new Error('Failed to export institutional semester attendance report.');
   },
+};
+
+/**
+ * ============================================================================
+ * ACADEMIC STRUCTURE (departments, batches, teacher class assignments)
+ * ============================================================================
+ */
+export const academicsApi = {
+  listDepartments: async () => await request('/academics/departments'),
+  createDepartment: async (payload) => await request('/academics/departments', { method: 'POST', body: payload }),
+  updateDepartment: async (id, payload) => await request(`/academics/departments/${id}`, { method: 'PUT', body: payload }),
+  deleteDepartment: async (id) => await request(`/academics/departments/${id}`, { method: 'DELETE' }),
+
+  listBatches: async (departmentId) => await request('/academics/batches', { params: { department_id: departmentId } }),
+  createBatch: async (payload) => await request('/academics/batches', { method: 'POST', body: payload }),
+  updateBatch: async (id, payload) => await request(`/academics/batches/${id}`, { method: 'PUT', body: payload }),
+  deleteBatch: async (id) => await request(`/academics/batches/${id}`, { method: 'DELETE' }),
+
+  // ================= PUBLIC STUDENT REGISTRATION =================
+  getRegistrationLinks: async () => await request('/admin/registration-links'),
+  createRegistrationLink: async (payload) => await request('/admin/registration-links', { method: 'POST', body: payload }),
+  updateRegistrationLink: async (id, payload) => await request(`/admin/registration-links/${id}`, { method: 'PATCH', body: payload }),
+  deleteRegistrationLink: async (id) => await request(`/admin/registration-links/${id}`, { method: 'DELETE' }),
+  getRegistrationRequests: async (status) => await request('/admin/registration-requests', { params: { status } }),
+  approveRegistration: async (id) => await request(`/admin/registration-requests/${id}/approve`, { method: 'POST' }),
+  rejectRegistration: async (id, reason) => await request(`/admin/registration-requests/${id}/reject`, { method: 'POST', body: { reason } }),
+
+  listAssignments: async (params = {}) => await request('/academics/assignments', { params }),
+  assign: async (payload) => await request('/academics/assignments', { method: 'POST', body: payload }),
+  deleteAssignment: async (id) => await request(`/academics/assignments/${id}`, { method: 'DELETE' }),
+  suggestCode: async (name) => await request('/academics/code-suggestion', { params: { name } }),
 };
 
 /**
@@ -819,11 +886,24 @@ export const deviceIntegrationApi = {
   },
 };
 
+/**
+ * ============================================================================
+ * PUBLIC STUDENT REGISTRATION (no sign-in required)
+ * ============================================================================
+ */
+export const registrationApi = {
+  getForm: async (token) => await request(`/registration/${token}`, { requiresAuth: false }),
+  submit: async (token, payload) => await request(`/registration/${token}`, { method: 'POST', body: payload, requiresAuth: false }),
+  getStatus: async (token, reference) => await request(`/registration/${token}/status/${reference}`, { requiresAuth: false }),
+};
+
 export default {
   tokenStorage,
   auth: authApi,
   student: studentApi,
   teacher: teacherApi,
   admin: adminApi,
+  academics: academicsApi,
+  registration: registrationApi,
   device: deviceIntegrationApi,
 };

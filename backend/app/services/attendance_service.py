@@ -14,6 +14,18 @@ from app.models import (
     Device
 )
 
+# LATE still means the student was in class, so it counts toward attendance.
+ATTENDED_STATUSES = (AttendanceStatus.PRESENT, AttendanceStatus.LATE)
+
+
+def attendance_percentage(records) -> float:
+    """The single attendance definition used by every dashboard and report."""
+    items = list(records)
+    if not items:
+        return 0.0
+    attended = sum(1 for record in items if record.status in ATTENDED_STATUSES)
+    return round((attended / len(items)) * 100, 1)
+
 
 class AttendanceService:
     """
@@ -90,9 +102,10 @@ class AttendanceService:
 
         # 4. Verify student belongs to the session class
         if student.class_id != session.class_id:
+            class_label = session.class_obj.name if session.class_obj else str(session.class_id)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Student '{student.id}' is not enrolled in class '{session.class_obj.name}'."
+                detail=f"Student '{student.id}' is not enrolled in class '{class_label}'."
             )
 
         # 5. Duplicate Check & Update Handler

@@ -10,6 +10,7 @@ import LoginPage from './pages/LoginPage';
 import StudentPortal from './pages/StudentPortal';
 import TeacherPortal from './pages/TeacherPortal';
 import AdminPortal from './pages/AdminPortal';
+import RegistrationPage from './pages/RegistrationPage';
 import { tokenStorage, authApi, onUnauthorized } from './api/api';
 import { CheckCircle2, AlertCircle, Info, X, Loader2 } from 'lucide-react';
 
@@ -91,11 +92,13 @@ function AppInner() {
   const handleLoginSuccess = useCallback((user, userRole) => {
     const normalizedRole = (userRole || user?.role || 'student').toLowerCase();
     setCurrentUser(user);
+    // Now that a session exists, pull the institution name and logo from the database.
+    refreshInstitutionInfo();
     navigate(roleHome(normalizedRole), { replace: true });
 
     const friendlyName = user?.name || user?.username || 'User';
     showToast(`Welcome back, ${friendlyName}! Authenticated as ${normalizedRole.toUpperCase()}.`, 'success');
-  }, [navigate, showToast]);
+  }, [navigate, showToast, refreshInstitutionInfo]);
 
   const handleLogout = useCallback(async () => {
     try {
@@ -146,6 +149,9 @@ function AppInner() {
           path="/"
           element={<Navigate to={currentUser ? signedInRole : '/login'} replace />}
         />
+
+        {/* Public admission form reached through an admin-generated link */}
+        <Route path="/register/:token" element={<RegistrationPage />} />
 
         {/* Public page */}
         <Route

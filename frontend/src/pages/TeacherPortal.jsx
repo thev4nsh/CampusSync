@@ -38,7 +38,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { teacherApi, announcementApi, ApiError } from '../api/api';
+import { teacherApi, announcementApi, assetUrl, ApiError } from '../api/api';
 import CourseMaterials from '../components/CourseMaterials';
 import Announcements from '../components/Announcements';
 import Classrooms from '../components/Classrooms';
@@ -123,6 +123,31 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
   const [selectedCalendarDate, setSelectedCalendarDate] = useState(null);
   const [exportingCsv, setExportingCsv] = useState(false);
 
+  // ================= SUBJECT ATTENDANCE STATE =================
+  const [subjectPicker, setSubjectPicker] = useState({ open: false, classId: null, className: '', subjects: [], loading: false, error: '' });
+  const [subjectAttendance, setSubjectAttendance] = useState({ open: false, loading: false, data: null, error: '' });
+
+  const openSubjectPicker = async (cls) => {
+    setSubjectPicker({ open: true, classId: cls.id, className: cls.name, subjects: [], loading: true, error: '' });
+    try {
+      const rows = await teacherApi.getSubjects(cls.id);
+      setSubjectPicker((prev) => ({ ...prev, subjects: Array.isArray(rows) ? rows : [], loading: false }));
+    } catch (err) {
+      setSubjectPicker((prev) => ({ ...prev, loading: false, error: err.message || 'Could not load this class\u2019s subjects.' }));
+    }
+  };
+
+  const openSubjectAttendance = async (classId, subject) => {
+    setSubjectPicker((prev) => ({ ...prev, open: false }));
+    setSubjectAttendance({ open: true, loading: true, data: null, error: '' });
+    try {
+      const data = await teacherApi.getSubjectAttendance(classId, subject.id);
+      setSubjectAttendance({ open: true, loading: false, data, error: '' });
+    } catch (err) {
+      setSubjectAttendance({ open: true, loading: false, data: null, error: err.message || 'Could not load subject attendance.' });
+    }
+  };
+
   const loadAllStudents = useCallback(async () => {
     setStudentsLoading(true);
     try {
@@ -176,7 +201,7 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
       setClassesList(loadedClasses);
 
       if (loadedClasses.length > 0) {
-        const initialClass = loadedClasses[0].name || loadedClasses[0].id || 'CSE-3A';
+        const initialClass = loadedClasses[0].name || loadedClasses[0].id;
         setSelectedClass(initialClass);
         loadClassRoster(initialClass);
         
@@ -328,22 +353,32 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
   // ================= SESSION START =================
   const handleStartSession = async (e) => {
     e.preventDefault();
-    setSessionStarting(true);
     setSessionError(null);
 
+    if (!selectedClass || !selectedSubject) {
+      setSessionError('Choose a class and subject before starting a session.');
+      return;
+    }
+
+    setSessionStarting(true);
     try {
       const result = await teacherApi.startSession({
-        classId: selectedClass || 'CSE-3A',
-        subjectId: selectedSubject || 'Database Systems',
+        classId: selectedClass,
+        subjectId: selectedSubject,
         date: selectedDate,
       });
 
+      // Never invent a session ID: live polling and "end session" must use the real one.
+      if (!result?.id) {
+        throw new Error('The server did not return an attendance session ID.');
+      }
+
       const sessionObj = {
-        id: result?.session_id || result?.id || `SES-${Date.now().toString().slice(-6)}`,
-        class_name: selectedClass,
-        subject_name: selectedSubject,
+        id: result.id,
+        class_name: result.class_name || selectedClass,
+        subject_name: result.subject_name || selectedSubject,
         start_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        status: 'Active',
+        status: 'active',
       };
 
       setActiveSession(sessionObj);
@@ -524,11 +559,17 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
         {/* Brand */}
         <div className="flex items-center justify-between h-16 px-6 bg-slate-950 border-b border-slate-800 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-600 rounded-xl text-white shadow-md shadow-blue-600/30">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
+            {institutionInfo?.logo_url ? (
+              <img
+                src={assetUrl(institutionInfo.logo_url)}
+                alt={`${institutionInfo?.college_name || 'Institution'} logo`}
+                className="h-9 w-9 rounded-xl bg-white object-contain p-0.5 shadow-md shadow-blue-600/30"
+              />
+            ) : (
+              <img src="/campussync-logo.svg" alt="CampusSync logo" className="h-9 w-9 rounded-xl object-contain shadow-md shadow-blue-600/30" />
+            )}
             <div>
-              <h2 className="text-base font-bold text-white tracking-tight leading-none">
+              <h2 className="text-base font-bold text-white tracking-tight leading-none truncate max-w-[130px]">
                 {institutionInfo?.college_short_name || 'CampusSync'}
               </h2>
               <span className="text-[10px] font-semibold text-blue-400 uppercase tracking-wider">Teacher Portal</span>
@@ -713,12 +754,18 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
             </button>
             <div className="h-6 w-px bg-slate-200 hidden sm:block" />
             <div className="flex items-center gap-2.5">
-              <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 border border-blue-200">
-                Faculty
-              </span>
+              <div className="hidden sm:block text-right leading-tight">
+                <p className="text-xs font-bold text-slate-900 truncate max-w-[200px]">{institutionInfo?.college_name || 'CampusSync University'}</p>
+                <p className="text-[11px] text-slate-400">Faculty</p>
+              </div>
               <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold shadow-sm">
                 {displayName.charAt(0).toUpperCase()}
               </div>
+              <img
+                src={institutionInfo?.logo_url ? assetUrl(institutionInfo.logo_url) : '/campussync-logo.svg'}
+                alt="Institution logo"
+                className="h-8 w-8 rounded-lg object-contain border border-slate-200 bg-white p-0.5"
+              />
             </div>
           </div>
         </header>
@@ -873,7 +920,7 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                           </div>
                         </div>
                         <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                          item.status === 'Completed' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'
+                          String(item.status).toLowerCase() === 'closed' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'
                         }`}>
                           {item.status || 'Scheduled'}
                         </span>
@@ -949,11 +996,7 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                           </option>
                         ))
                       ) : (
-                        <>
-                          <option value="CSE-3A">CSE-3A (3rd Year, Sec A)</option>
-                          <option value="CSE-3B">CSE-3B (3rd Year, Sec B)</option>
-                          <option value="IT-3A">IT-3A (3rd Year, Sec A)</option>
-                        </>
+                        <option value="">No classes assigned yet</option>
                       )}
                     </select>
                   </div>
@@ -975,12 +1018,7 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                           </option>
                         ))
                       ) : (
-                        <>
-                          <option value="Database Systems">Database Systems (CS302)</option>
-                          <option value="Data Structures">Data Structures (CS301)</option>
-                          <option value="Operating Systems">Operating Systems (CS303)</option>
-                          <option value="Computer Networks">Computer Networks (CS304)</option>
-                        </>
+                        <option value="">No subjects assigned yet</option>
                       )}
                     </select>
                   </div>
@@ -1937,7 +1975,7 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                                 {cls.name}
                               </span>
                               <span className="text-xs px-2.5 py-0.5 rounded-md font-bold bg-slate-100 text-slate-700 border border-slate-200">
-                                {cls.year || '3rd Year'}
+                                {cls.batch_name || cls.year || 'Batch'}
                               </span>
                             </div>
                             <span className="text-xs font-bold text-slate-500">
@@ -1975,11 +2013,10 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                         <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100">
                           <button 
                             type="button"
-                            disabled
-                            title="RFID, fingerprint, and face-recognition terminals arrive in Phase 2"
-                            className="py-2.5 px-3 bg-slate-300 text-slate-500 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-not-allowed"
+                            onClick={() => openSubjectPicker(cls)}
+                            className="py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-1.5"
                           >
-                            <Lock className="w-3.5 h-3.5" /> Terminal
+                            <ClipboardList className="w-3.5 h-3.5" /> Subject Attendance
                           </button>
                           <button 
                             onClick={() => { 
@@ -2058,6 +2095,23 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
           {/* ================= PROFILE ================= */}
           {activeTab === 'profile' && (
             <div className="space-y-6 max-w-4xl mx-auto">
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex items-center gap-4">
+                {institutionInfo?.logo_url ? (
+                  <img
+                    src={assetUrl(institutionInfo.logo_url)}
+                    alt="Institution logo"
+                    className="h-14 w-14 rounded-xl object-contain border border-slate-200 bg-white p-1 shrink-0"
+                  />
+                ) : (
+                  <img src="/campussync-logo.svg" alt="CampusSync logo" className="h-14 w-14 rounded-xl object-contain shrink-0" />
+                )}
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Institution</p>
+                  <h3 className="text-base font-bold text-slate-900 truncate">{institutionInfo?.college_name || 'CampusSync University'}</h3>
+                  <p className="text-xs text-slate-500 truncate">{institutionInfo?.academic_term || 'Academic Session 2026'}</p>
+                </div>
+              </div>
+
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 md:p-8 space-y-6">
                 <div className="flex items-center gap-6 border-b border-slate-100 pb-6">
                   <div className="w-20 h-20 rounded-full bg-blue-600 text-white flex items-center justify-center font-extrabold text-2xl shadow-lg shrink-0">
@@ -2087,6 +2141,119 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
           )}
         </main>
       </div>
+
+      {/* ================= SUBJECT PICKER ================= */}
+      {subjectPicker.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative">
+            <button onClick={() => setSubjectPicker((prev) => ({ ...prev, open: false }))} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1">
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-lg font-bold text-slate-900 mb-1">Subject Attendance</h3>
+            <p className="text-xs text-slate-500 mb-4">{subjectPicker.className} — choose one of your subjects.</p>
+
+            {subjectPicker.loading ? (
+              <div className="py-6 text-center text-slate-400 text-sm">
+                <Loader2 className="w-5 h-5 animate-spin mx-auto text-indigo-600 mb-2" /> Loading subjects...
+              </div>
+            ) : subjectPicker.error ? (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700">{subjectPicker.error}</div>
+            ) : subjectPicker.subjects.length === 0 ? (
+              <p className="text-sm text-slate-500">No subjects are assigned to you in this class yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {subjectPicker.subjects.map((subject) => (
+                  <button
+                    key={subject.id}
+                    onClick={() => openSubjectAttendance(subjectPicker.classId, subject)}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 text-left transition-colors"
+                  >
+                    <span className="text-sm font-semibold text-slate-800">{subject.name}</span>
+                    <span className="flex items-center gap-2 text-xs text-slate-400">
+                      {subject.code && <span className="font-mono">{subject.code}</span>}
+                      <ChevronRight className="w-4 h-4" />
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ================= SUBJECT ATTENDANCE DETAIL ================= */}
+      {subjectAttendance.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl border border-slate-200 relative max-h-[90vh] overflow-y-auto">
+            <button onClick={() => setSubjectAttendance({ open: false, loading: false, data: null, error: '' })} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1">
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-lg font-bold text-slate-900 mb-1">
+              {subjectAttendance.data ? `${subjectAttendance.data.subject_name} · ${subjectAttendance.data.class_name}` : 'Subject Attendance'}
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">Per-student attendance recorded for this subject in this class.</p>
+
+            {subjectAttendance.loading ? (
+              <div className="py-10 text-center text-slate-400 text-sm">
+                <Loader2 className="w-5 h-5 animate-spin mx-auto text-indigo-600 mb-2" /> Loading attendance...
+              </div>
+            ) : subjectAttendance.error ? (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700">{subjectAttendance.error}</div>
+            ) : subjectAttendance.data ? (
+              <>
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                    <p className="text-[11px] uppercase font-bold text-slate-400">Sessions held</p>
+                    <p className="text-xl font-black text-slate-900">{subjectAttendance.data.sessions_held}</p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                    <p className="text-[11px] uppercase font-bold text-slate-400">Students</p>
+                    <p className="text-xl font-black text-slate-900">{subjectAttendance.data.students.length}</p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                    <p className="text-[11px] uppercase font-bold text-slate-400">Records</p>
+                    <p className="text-xl font-black text-slate-900">{subjectAttendance.data.total_records}</p>
+                  </div>
+                </div>
+
+                {subjectAttendance.data.students.length === 0 ? (
+                  <p className="text-sm text-slate-500">No students are enrolled in this class yet.</p>
+                ) : (
+                  <div className="rounded-xl border border-slate-200 overflow-hidden">
+                    <table className="w-full text-left border-collapse text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                          <th className="py-2.5 px-4">Student</th>
+                          <th className="py-2.5 px-4">Present</th>
+                          <th className="py-2.5 px-4">Total</th>
+                          <th className="py-2.5 px-4">Attendance</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {subjectAttendance.data.students.map((student) => (
+                          <tr key={student.student_id}>
+                            <td className="py-2.5 px-4">
+                              <p className="font-semibold text-slate-900">{student.student_name}</p>
+                              <p className="text-xs text-slate-400 font-mono">{student.student_id}</p>
+                            </td>
+                            <td className="py-2.5 px-4 text-slate-700">{student.present}</td>
+                            <td className="py-2.5 px-4 text-slate-700">{student.total}</td>
+                            <td className="py-2.5 px-4">
+                              <span className={`px-2 py-0.5 rounded-md text-xs font-bold ${student.percentage >= 75 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                                {student.percentage}%
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

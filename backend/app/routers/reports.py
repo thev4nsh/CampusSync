@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Class, Subject, Student, AttendanceRecord, AttendanceSession, AttendanceStatus
 from app.dependencies import require_admin
+from app.services.attendance_service import attendance_percentage
 
 router = APIRouter(prefix="/admin/reports", tags=["Reports"])
 
@@ -21,7 +22,7 @@ def get_attendance_reports(
     total = len(records)
     present = sum(1 for r in records if r.status == AttendanceStatus.PRESENT)
     absent = sum(1 for r in records if r.status == AttendanceStatus.ABSENT)
-    avg_rate = round((present / total * 100), 1) if total > 0 else 0.0
+    avg_rate = attendance_percentage(records)
 
     return {
         "total_records": total,
@@ -45,7 +46,7 @@ def get_class_reports(
         records = db.query(AttendanceRecord).filter(AttendanceRecord.student_id.in_(st_ids)).all() if st_ids else []
         tot = len(records)
         pres = sum(1 for r in records if r.status == AttendanceStatus.PRESENT)
-        pct = round((pres / tot * 100), 1) if tot > 0 else 0.0
+        pct = attendance_percentage(records)
 
         results.append({
             "class_id": c.id,
@@ -71,7 +72,7 @@ def get_subject_reports(
         ).all()
         tot = len(records)
         pres = sum(1 for r in records if r.status == AttendanceStatus.PRESENT)
-        pct = round((pres / tot * 100), 1) if tot > 0 else 0.0
+        pct = attendance_percentage(records)
 
         results.append({
             "subject_id": s.id,

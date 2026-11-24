@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
@@ -22,18 +23,53 @@ from app.security import (
     hash_refresh_token,
 )
 from app.dependencies import get_current_user, oauth2_scheme
+from app.services.academics_service import logo_file, logo_url
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
+# In-memory brute-force guard: 5 failed attempts per client+identifier per 15 minutes.
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_FAILURE_WINDOW = timedelta(minutes=15)
+_failed_logins: dict[str, list[datetime]] = {}
+
+
+def _throttle_key(http_request: Request, identifier: str) -> str:
+    client = http_request.client.host if http_request.client else "unknown"
+    return f"{client}|{identifier.casefold()}"
+
+
+def _too_many_failures(key: str) -> bool:
+    now = datetime.now(timezone.utc)
+    recent = [moment for moment in _failed_logins.get(key, []) if now - moment < LOGIN_FAILURE_WINDOW]
+    _failed_logins[key] = recent
+    return len(recent) >= LOGIN_FAILURE_LIMIT
+
+
+def _record_failure(key: str) -> None:
+    _failed_logins.setdefault(key, []).append(datetime.now(timezone.utc))
+
+
+def _int_setting(value, default: int) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
 
 @router.post("/login", response_model=Token)
-def login(request: LoginRequest, db: Session = Depends(get_db)):
+def login(body: LoginRequest, http_request: Request, db: Session = Depends(get_db)):
     """
     Authenticate user using institutional Email or Student/Teacher ID with password.
     Returns JWT access and refresh tokens along with user role and profile.
     """
     db.info.pop("institution_id", None)
-    identifier = request.identifier.strip()
+    identifier = body.identifier.strip()
+    throttle_key = _throttle_key(http_request, identifier)
+    if _too_many_failures(throttle_key):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed sign-in attempts. Try again in 15 minutes.",
+        )
     user = None
 
     # 1. Try matching by Email directly
@@ -52,6 +88,7 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
             user = teacher.user
 
     if not user:
+        _record_failure(throttle_key)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials. Please verify your ID/Email and password.",
@@ -64,12 +101,15 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="Account is inactive. Please contact the administrator."
         )
 
-    if not verify_password(request.password, user.hashed_password):
+    if not verify_password(body.password, user.hashed_password):
+        _record_failure(throttle_key)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials. Please verify your ID/Email and password.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    _failed_logins.pop(throttle_key, None)
 
     now = datetime.now(timezone.utc)
     session_id = str(uuid4())
@@ -206,21 +246,50 @@ def refresh_token_endpoint(body: RefreshTokenRequest, db: Session = Depends(get_
     )
 
 
+@router.get("/institution/logo")
+def get_institution_logo():
+    """Serve the uploaded institution logo publicly so the sign-in page can show it."""
+    path = logo_file()
+    if not path:
+        raise HTTPException(status_code=404, detail="No institution logo has been uploaded.")
+    media_type = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(
+        path,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
 @router.get("/institution")
 def get_public_institution_info(db: Session = Depends(get_db)):
     """Retrieve public branding for the configured first college."""
     db.info.pop("institution_id", None)
-    institution = db.query(Institution).filter(Institution.id == 1, Institution.is_active.is_(True)).first()
-    settings = db.query(SystemSetting).filter(SystemSetting.institution_id == 1).all()
-    setting_map = {s.key: s.value for s in settings}
+    institution = (
+        db.query(Institution)
+        .filter(Institution.is_active.is_(True))
+        .order_by(Institution.id.asc())
+        .first()
+    )
+    stored = (
+        db.query(SystemSetting).filter(SystemSetting.institution_id == institution.id).all()
+        if institution
+        else []
+    )
+    setting_map = {s.key: s.value for s in stored}
 
     return {
         "college_name": setting_map.get("college_name", institution.name if institution else "CampusSync University"),
         "college_short_name": setting_map.get("college_short_name", "CampusSync"),
+        "logo_url": logo_url(),
         "academic_term": setting_map.get("academic_term", "Academic Session 2026"),
         "support_email": setting_map.get("support_email", "admin@campussync.edu"),
         "system_tagline": setting_map.get("system_tagline", "Smart Multi-Modal Attendance & Campus Management System"),
-        "min_attendance_pct": int(setting_map.get("min_attendance_pct", "75")),
-        "late_threshold_minutes": int(setting_map.get("late_threshold_minutes", "15")),
-        "session_timeout_minutes": int(setting_map.get("session_timeout_minutes", "60")),
+        "min_attendance_pct": _int_setting(setting_map.get("min_attendance_pct"), 75),
+        "late_threshold_minutes": _int_setting(setting_map.get("late_threshold_minutes"), 15),
+        "session_timeout_minutes": _int_setting(setting_map.get("session_timeout_minutes"), 60),
     }

@@ -1,7 +1,9 @@
 from typing import List, Optional, Any
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import uuid
+import zlib
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import (
@@ -16,6 +18,7 @@ from app.models import (
     Student,
     TeacherSubjectAssignment,
     User,
+    UserRole,
     Device,
     DeviceType
 )
@@ -34,11 +37,158 @@ from app.services.device_service import device_service
 from app.dependencies import (
     get_current_active_user,
     require_teacher,
-    require_admin
 )
 from app.dependencies import get_authenticated_device
 
 router = APIRouter(prefix="/attendance", tags=["Attendance"])
+
+
+# ==============================================================================
+# SHARED HELPERS
+# ==============================================================================
+
+def _session_time(date_value: Optional[str]) -> datetime:
+    """
+    Build the timestamp for an attendance session or record.
+
+    Teachers can back-fill a roll call, so an explicit ``date`` (YYYY-MM-DD) is
+    honoured instead of always stamping "now". The clock time still comes from
+    the current moment so ordering inside a day stays sensible.
+    """
+    now = datetime.now(timezone.utc)
+    if date_value is None or str(date_value).strip() == "":
+        return now
+    try:
+        parsed = date.fromisoformat(str(date_value).strip())
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Use a valid attendance date in YYYY-MM-DD format.",
+        ) from exc
+    return datetime(
+        parsed.year, parsed.month, parsed.day,
+        now.hour, now.minute, now.second, tzinfo=timezone.utc
+    )
+
+
+def _day_bounds(moment: datetime) -> tuple[datetime, datetime]:
+    """Return the [start, end) UTC bounds of the day containing ``moment``."""
+    start = moment.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, start + timedelta(days=1)
+
+
+def _resolve_class(db: Session, value: Any) -> Optional[Class]:
+    """Resolve a class by exact numeric ID or exact name. Never guesses."""
+    if value is None:
+        return None
+    clean = str(value).strip()
+    if not clean:
+        return None
+    try:
+        return db.query(Class).filter(Class.id == int(clean)).first()
+    except (TypeError, ValueError):
+        return db.query(Class).filter(Class.name.ilike(clean)).first()
+
+
+def _resolve_subject(db: Session, value: Any) -> Optional[Subject]:
+    """Resolve a subject by exact numeric ID, exact code, or exact name."""
+    if value is None:
+        return None
+    clean = str(value).strip()
+    if not clean:
+        return None
+    try:
+        return db.query(Subject).filter(Subject.id == int(clean)).first()
+    except (TypeError, ValueError):
+        return db.query(Subject).filter(
+            (Subject.name.ilike(clean)) | (Subject.code.ilike(clean))
+        ).first()
+
+
+def _is_numeric(value: Any) -> bool:
+    """True when the caller passed an ID rather than a free-text name."""
+    try:
+        int(str(value).strip())
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _resolve_or_create_class(db: Session, value: Any, department: str) -> Class:
+    """An ID must exist; a new name is created once, deterministically."""
+    clean = str(value or "").strip()
+    if not clean:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Select the class for this attendance session.",
+        )
+    existing = _resolve_class(db, clean)
+    if existing:
+        return existing
+    if _is_numeric(clean):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found.")
+
+    created = Class(
+        name=clean,
+        year="3rd Year",
+        section="A",
+        department=department or "General",
+    )
+    db.add(created)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return _resolve_class(db, clean)
+    db.refresh(created)
+    return created
+
+
+def _resolve_or_create_subject(db: Session, value: Any, department: str) -> Subject:
+    """An ID must exist; a new name gets a stable code instead of a random one."""
+    clean = str(value or "").strip()
+    if not clean:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Select the subject for this attendance session.",
+        )
+    existing = _resolve_subject(db, clean)
+    if existing:
+        return existing
+    if _is_numeric(clean):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subject not found.")
+
+    created = Subject(
+        code=f"SUB{zlib.crc32(clean.casefold().encode('utf-8')) % 100000:05d}",
+        name=clean,
+        department=department or "General",
+    )
+    db.add(created)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return _resolve_subject(db, clean)
+    db.refresh(created)
+    return created
+
+
+def _can_view_session(db: Session, session: AttendanceSession, user: User) -> bool:
+    """Admins see everything; teachers and students only their own classes."""
+    if user.role == UserRole.ADMIN:
+        return True
+    if user.role == UserRole.TEACHER:
+        teacher = db.query(Teacher).filter(Teacher.user_id == user.id).first()
+        if not teacher:
+            return False
+        if session.teacher_id == teacher.id:
+            return True
+        return db.query(TeacherSubjectAssignment.id).filter(
+            TeacherSubjectAssignment.teacher_id == teacher.id,
+            TeacherSubjectAssignment.class_id == session.class_id,
+        ).first() is not None
+    student = db.query(Student).filter(Student.user_id == user.id).first()
+    return bool(student and student.class_id == session.class_id)
 
 
 # ==============================================================================
@@ -58,7 +208,7 @@ def start_attendance_session(
     """
     # 1. Resolve Teacher
     teacher = db.query(Teacher).filter(Teacher.user_id == current_user.id).first()
-    if not teacher and current_user.role.value == "admin":
+    if not teacher and current_user.role == UserRole.ADMIN:
         teacher = db.query(Teacher).first()
 
     if not teacher:
@@ -67,52 +217,20 @@ def start_attendance_session(
             detail="Faculty profile required to initiate an attendance session."
         )
 
-    # 2. Resolve Class (by ID or Name)
-    target_class = None
-    try:
-        numeric_class_id = int(data.class_id)
-        target_class = db.query(Class).filter(Class.id == numeric_class_id).first()
-    except (ValueError, TypeError):
-        target_class = db.query(Class).filter(Class.name.ilike(str(data.class_id).strip())).first()
+    # 2. Resolve Class (by ID, or by name with a single deterministic creation)
+    target_class = _resolve_or_create_class(db, data.class_id, teacher.department)
 
-    if not target_class:
-        # Create class if not found for initial setup ease
-        target_class = Class(
-            name=str(data.class_id).strip(),
-            year="3rd Year",
-            section="A",
-            department=teacher.department
-        )
-        db.add(target_class)
-        db.commit()
-        db.refresh(target_class)
+    # 3. Resolve Subject (by ID/code/name, with a stable code when created)
+    target_subject = _resolve_or_create_subject(db, data.subject_id, teacher.department)
 
-    # 3. Resolve Subject (by ID or Name)
-    target_subject = None
-    try:
-        numeric_subject_id = int(data.subject_id)
-        target_subject = db.query(Subject).filter(Subject.id == numeric_subject_id).first()
-    except (ValueError, TypeError):
-        target_subject = db.query(Subject).filter(Subject.name.ilike(str(data.subject_id).strip())).first()
-
-    if not target_subject:
-        target_subject = Subject(
-            code=f"CS{uuid.uuid4().hex[:3].upper()}",
-            name=str(data.subject_id).strip(),
-            department=teacher.department
-        )
-        db.add(target_subject)
-        db.commit()
-        db.refresh(target_subject)
-
-    # 4. Create Session Instance
+    # 4. Create Session Instance (honouring an explicit back-fill date)
     session_id = f"SES-{uuid.uuid4().hex[:6].upper()}"
     new_session = AttendanceSession(
         id=session_id,
         teacher_id=teacher.id,
         class_id=target_class.id,
         subject_id=target_subject.id,
-        start_time=datetime.now(timezone.utc),
+        start_time=_session_time(data.date),
         status=SessionStatus.ACTIVE
     )
 
@@ -140,17 +258,35 @@ def list_attendance_sessions(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """List recent attendance sessions."""
-    sessions = db.query(AttendanceSession).order_by(AttendanceSession.created_at.desc()).limit(50).all()
+    """List recent attendance sessions the caller is allowed to see."""
+    query = db.query(AttendanceSession)
+    if current_user.role != UserRole.ADMIN:
+        visible_ids = []
+        if current_user.role == UserRole.TEACHER:
+            teacher = db.query(Teacher).filter(Teacher.user_id == current_user.id).first()
+            if not teacher:
+                return []
+            visible_ids = [
+                a.class_id for a in teacher.subject_assignments
+                if a.class_id is not None
+            ]
+        else:
+            student = db.query(Student).filter(Student.user_id == current_user.id).first()
+            if not student or not student.class_id:
+                return []
+            visible_ids = [student.class_id]
+        query = query.filter(AttendanceSession.class_id.in_(visible_ids))
+
+    sessions = query.order_by(AttendanceSession.created_at.desc()).limit(50).all()
     return [
         AttendanceSessionResponse(
             id=s.id,
             teacher_id=s.teacher_id,
             teacher_name=s.teacher.user.name if s.teacher else None,
             class_id=s.class_id,
-            class_name=s.class_obj.name,
+            class_name=s.class_obj.name if s.class_obj else "",
             subject_id=s.subject_id,
-            subject_name=s.subject.name,
+            subject_name=s.subject.name if s.subject else "",
             start_time=s.start_time,
             end_time=s.end_time,
             status=s.status,
@@ -164,13 +300,31 @@ def list_attendance_sessions(
 @router.get("/session/{session_id}")
 def get_attendance_session_detail(
     session_id: str,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Retrieve details and statistics for a specific attendance session."""
     session = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance session not found.")
-    return session
+    if not _can_view_session(db, session, current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot view this attendance session.")
+
+    return {
+        "id": session.id,
+        "teacher_id": session.teacher_id,
+        "teacher_name": session.teacher.user.name if session.teacher and session.teacher.user else None,
+        "class_id": session.class_id,
+        "class_name": session.class_obj.name if session.class_obj else None,
+        "subject_id": session.subject_id,
+        "subject_name": session.subject.name if session.subject else None,
+        "start_time": session.start_time,
+        "end_time": session.end_time,
+        "status": session.status,
+        "total_records": db.query(AttendanceRecord).filter(
+            AttendanceRecord.session_id == session.id
+        ).count(),
+    }
 
 
 @router.post("/sessions/{session_id}/close")
@@ -184,6 +338,8 @@ def close_attendance_session(
     session = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance session not found.")
+    if not _can_view_session(db, session, current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot close this attendance session.")
 
     session.status = SessionStatus.CLOSED
     session.end_time = datetime.now(timezone.utc)
@@ -196,11 +352,18 @@ def close_attendance_session(
 @router.get("/session/{session_id}/live", response_model=List[AttendanceRecordResponse])
 def get_live_session_attendance(
     session_id: str,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
     Fetch the live real-time stream of incoming attendance records for an active terminal session.
     """
+    session = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance session not found.")
+    if not _can_view_session(db, session, current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot view this attendance session.")
+
     records = db.query(AttendanceRecord).filter(
         AttendanceRecord.session_id == session_id
     ).order_by(AttendanceRecord.timestamp.desc()).all()
@@ -209,9 +372,9 @@ def get_live_session_attendance(
         AttendanceRecordResponse(
             id=r.id,
             student_id=r.student_id,
-            student_name=r.student.user.name,
-            class_name=r.session.class_obj.name if r.session.class_obj else None,
-            subject=r.session.subject.name,
+            student_name=r.student.user.name if r.student and r.student.user else r.student_id,
+            class_name=r.session.class_obj.name if r.session and r.session.class_obj else None,
+            subject=r.session.subject.name if r.session and r.session.subject else "",
             date=r.timestamp.strftime("%d %b %Y"),
             time=r.timestamp.strftime("%I:%M %p"),
             method=r.method.value,
@@ -235,97 +398,76 @@ def submit_manual_attendance(
 ):
     """
     Submit batch manual attendance roster from faculty roll call.
-    Automatically resolves/creates session and saves PRESENT, ABSENT, or LATE statuses.
+    Automatically resolves/creates the session and saves PRESENT, ABSENT, or LATE statuses.
     """
     teacher = db.query(Teacher).filter(Teacher.user_id == current_user.id).first()
-    if not teacher and current_user.role.value == "admin":
+    if not teacher and current_user.role == UserRole.ADMIN:
         teacher = db.query(Teacher).first()
+    if not teacher:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Faculty profile required to save attendance."
+        )
 
-    # 1. Resolve Class
-    target_class = None
-    if payload.class_id:
-        clean_class = str(payload.class_id).strip()
-        try:
-            numeric_cid = int(clean_class)
-            target_class = db.query(Class).filter(Class.id == numeric_cid).first()
-        except (ValueError, TypeError):
-            pass
-        if not target_class:
-            target_class = db.query(Class).filter(Class.name.ilike(clean_class)).first()
-
-    if not target_class and payload.records:
-        first_st = db.query(Student).filter(Student.id == payload.records[0].student_id).first()
-        if first_st and first_st.class_id:
-            target_class = db.query(Class).filter(Class.id == first_st.class_id).first()
-
-    if not target_class:
-        target_class = db.query(Class).first()
+    # 1. Resolve Class (given class, else the first student's own class)
+    class_value = payload.class_id
+    if class_value in (None, "") and payload.records:
+        first_student = db.query(Student).filter(Student.id == payload.records[0].student_id).first()
+        if first_student and first_student.class_id:
+            class_value = first_student.class_id
+    target_class = _resolve_or_create_class(db, class_value, teacher.department)
 
     # 2. Resolve Subject
-    target_subject = None
-    if payload.subject_id:
-        clean_subj = str(payload.subject_id).strip()
-        try:
-            numeric_sid = int(clean_subj)
-            target_subject = db.query(Subject).filter(Subject.id == numeric_sid).first()
-        except (ValueError, TypeError):
-            pass
-        if not target_subject:
-            target_subject = db.query(Subject).filter(
-                (Subject.name.ilike(clean_subj)) | (Subject.code.ilike(clean_subj))
-            ).first()
+    target_subject = _resolve_or_create_subject(db, payload.subject_id, teacher.department)
 
-    if not target_subject and teacher:
-        first_assignment = db.query(TeacherSubjectAssignment).filter(TeacherSubjectAssignment.teacher_id == teacher.id).first()
-        if first_assignment:
-            target_subject = first_assignment.subject
-
-    if not target_subject:
-        target_subject = db.query(Subject).first()
-
-    # 3. Resolve or Create Session
+    # 3. Resolve or create the session for the requested day
+    record_time = _session_time(payload.date)
     session = None
     if payload.session_id:
-        session = db.query(AttendanceSession).filter(AttendanceSession.id == payload.session_id).first()
-
-    if not session and target_class and target_subject and teacher:
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         session = db.query(AttendanceSession).filter(
+            AttendanceSession.id == payload.session_id,
+            AttendanceSession.teacher_id == teacher.id,
+        ).first()
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Attendance session not found for this faculty account."
+            )
+
+    if not session:
+        day_start, day_end = _day_bounds(record_time)
+        session = db.query(AttendanceSession).filter(
+            AttendanceSession.teacher_id == teacher.id,
             AttendanceSession.class_id == target_class.id,
             AttendanceSession.subject_id == target_subject.id,
-            AttendanceSession.created_at >= today_start
-        ).order_by(AttendanceSession.created_at.desc()).first()
+            AttendanceSession.start_time >= day_start,
+            AttendanceSession.start_time < day_end,
+        ).order_by(AttendanceSession.start_time.desc()).first()
 
         if not session:
-            session_id = f"SES-{uuid.uuid4().hex[:6].upper()}"
             session = AttendanceSession(
-                id=session_id,
+                id=f"SES-{uuid.uuid4().hex[:6].upper()}",
                 teacher_id=teacher.id,
                 class_id=target_class.id,
                 subject_id=target_subject.id,
-                start_time=datetime.now(timezone.utc),
+                start_time=record_time,
                 status=SessionStatus.ACTIVE
             )
             db.add(session)
             db.commit()
             db.refresh(session)
 
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unable to initialize attendance session. Please ensure Class and Subject are selected."
-        )
-
     # 4. Process Each Student Record
     created_count = 0
     updated_count = 0
-    record_time = datetime.now(timezone.utc)
 
     for item in payload.records:
         if not item.student_id:
             continue
         student = db.query(Student).filter(Student.id == item.student_id).first()
         if not student:
+            continue
+        if student.class_id != session.class_id:
             continue
 
         # Status mapping
@@ -367,7 +509,10 @@ def submit_manual_attendance(
 
     return AttendanceSubmissionResponse(
         success=True,
-        message=f"Manual attendance saved for {created_count + updated_count} students in {target_class.name if target_class else 'class'} for {target_subject.name if target_subject else 'subject'}."
+        message=(
+            f"Manual attendance saved for {created_count + updated_count} students in "
+            f"{target_class.name} for {target_subject.name}."
+        )
     )
 
 

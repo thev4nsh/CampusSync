@@ -12,7 +12,9 @@ from app.routers import (
     devices,
     reports,
     learning,
-    announcements
+    announcements,
+    academics,
+    registration,
 )
 
 # Instantiate the FastAPI Application
@@ -29,6 +31,16 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
+    # Development also accepts loopback and private-LAN origins (phone testing on Wi-Fi)
+    # without opening the API to every site on the internet.
+    allow_origin_regex=(
+        r"^https?://(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+        r"192\.168\.\d{1,3}\.\d{1,3}|"
+        r"172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|"
+        r"[a-z0-9-]+\.local)(:\d+)?$"
+        if settings.ENVIRONMENT == "development"
+        else None
+    ),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Accept", "Authorization", "Content-Type", "X-Device-ID", "X-Device-Key"],
@@ -72,19 +84,12 @@ app.include_router(admin.router, prefix=api_prefix)
 app.include_router(attendance.router, prefix=api_prefix)
 app.include_router(devices.router, prefix=api_prefix)
 app.include_router(reports.router, prefix=api_prefix)
+app.include_router(academics.router, prefix=api_prefix)
+app.include_router(registration.router, prefix=api_prefix)
 
-# Also mount direct root aliases for seamless client routing compatibility
-app.include_router(auth.router)
-app.include_router(attendance.router)
-app.include_router(devices.router)
-app.include_router(students.router)
-app.include_router(teachers.router)
-app.include_router(admin.router)
-app.include_router(reports.router)
-
+# Every router is mounted exactly once under /api. The browser client normalizes
+# all request paths to this prefix, so the old root aliases only duplicated the
+# OpenAPI document and widened the public surface.
 app.include_router(learning.materials_router, prefix=api_prefix)
 app.include_router(learning.ai_router, prefix=api_prefix)
-app.include_router(learning.materials_router)
-app.include_router(learning.ai_router)
 app.include_router(announcements.router, prefix=api_prefix)
-app.include_router(announcements.router)

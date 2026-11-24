@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="CampusSync logo">
+  <defs>
+    <linearGradient id="campussync-mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#4338ca"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="30" fill="url(#campussync-mark)"/>
+  <circle cx="64" cy="64" r="30" fill="none" stroke="#ffffff" stroke-opacity="0.22" stroke-width="8"/>
+  <path d="M64 34a30 30 0 0 1 27 17" fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round"/>
+  <path d="M64 94a30 30 0 0 1-27-17" fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="92" cy="47" r="6" fill="#93c5fd"/>
+  <circle cx="36" cy="81" r="6" fill="#93c5fd"/>
+</svg>

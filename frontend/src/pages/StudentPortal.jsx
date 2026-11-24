@@ -32,7 +32,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { studentApi, announcementApi, ApiError } from '../api/api';
+import { studentApi, announcementApi, assetUrl, ApiError } from '../api/api';
 import CourseMaterials from '../components/CourseMaterials';
 import Announcements from '../components/Announcements';
 import Classrooms from '../components/Classrooms';
@@ -163,6 +163,8 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
   useEffect(() => {
     if (activeTab === 'dashboard') {
       fetchDashboard();
+      // The greeting and header badge read the student's year, section and batch.
+      fetchProfile();
     } else if (activeTab === 'attendance' || activeTab === 'history') {
       fetchAttendanceHistory();
       fetchDashboard();
@@ -174,14 +176,13 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
   const displayName = profileData?.name || currentUser?.name || 'Student';
   const displayId = profileData?.id || currentUser?.student_id || currentUser?.id || '—';
   const displayClass = profileData?.class_name || currentUser?.class_name || 'B.Tech CSE';
-  const displayDept = profileData?.department || institutionInfo?.college_name || 'Computer Science & Engineering';
+  const displayDept = profileData?.department || 'Department not set';
+  const displayBatch = profileData?.batch_name || 'No batch assigned';
 
+  // Only real subjects the student is actually enrolled in — no placeholders.
   const availableSubjects = Array.from(new Set([
     ...(dashboardData?.subject_breakdown?.map(s => s.subject_name || s.code) || []),
-    ...(attendanceRecords.map(r => r.subject) || []),
-    'Microprocessor and Microcontroller',
-    'Compiler Design',
-    'Artificial Intelligence'
+    ...(attendanceRecords.map(r => r.subject) || [])
   ].filter(Boolean)));
 
   // Method badge helper
@@ -238,11 +239,17 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
         {/* Brand */}
         <div className="flex items-center justify-between h-16 px-6 bg-slate-950 border-b border-slate-800 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-600 rounded-xl text-white shadow-md shadow-blue-600/30">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
+            {institutionInfo?.logo_url ? (
+              <img
+                src={assetUrl(institutionInfo.logo_url)}
+                alt={`${institutionInfo?.college_name || 'Institution'} logo`}
+                className="h-9 w-9 rounded-xl bg-white object-contain p-0.5 shadow-md shadow-blue-600/30"
+              />
+            ) : (
+              <img src="/campussync-logo.svg" alt="CampusSync logo" className="h-9 w-9 rounded-xl object-contain shadow-md shadow-blue-600/30" />
+            )}
             <div>
-              <h2 className="text-base font-bold text-white tracking-tight leading-none">
+              <h2 className="text-base font-bold text-white tracking-tight leading-none truncate max-w-[130px]">
                 {institutionInfo?.college_short_name || 'CampusSync'}
               </h2>
               <span className="text-[10px] font-semibold text-blue-400 uppercase tracking-wider">Student Portal</span>
@@ -389,12 +396,21 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
             <div className="h-6 w-px bg-slate-200 hidden sm:block" />
 
             <div className="flex items-center gap-2.5">
-              <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 border border-blue-200 font-mono">
-                {profileData?.class || currentUser?.class || 'CSE'}
+              <span className="hidden lg:inline text-xs font-semibold px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 border border-blue-200 font-mono">
+                {profileData?.class_name || profileData?.class || currentUser?.class_name || 'No class'}
               </span>
+              <div className="hidden sm:block text-right leading-tight">
+                <p className="text-xs font-bold text-slate-900 truncate max-w-[200px]">{institutionInfo?.college_name || 'CampusSync University'}</p>
+                <p className="text-[11px] text-slate-400">Student</p>
+              </div>
               <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold shadow-sm">
                 {displayName.charAt(0).toUpperCase()}
               </div>
+              <img
+                src={institutionInfo?.logo_url ? assetUrl(institutionInfo.logo_url) : '/campussync-logo.svg'}
+                alt="Institution logo"
+                className="h-8 w-8 rounded-lg object-contain border border-slate-200 bg-white p-0.5"
+              />
             </div>
           </div>
         </header>
@@ -436,7 +452,7 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
                   <div>
                     <h2 className="text-2xl font-bold tracking-tight">Welcome, {displayName}</h2>
                     <p className="mt-1 text-blue-100 text-sm">
-                      {profileData?.department || 'Department of Computer Science'} • {profileData?.year || 'Academic Year'} ({profileData?.class || 'Section'})
+                      {profileData?.department || 'Department of Computer Science'} • {profileData?.year || 'Academic Year'} ({profileData?.class_name || 'No class'}{profileData?.section ? ` · Section ${profileData.section}` : ''})
                     </p>
                   </div>
                   <div className="flex items-center gap-3 bg-white/10 backdrop-blur-md px-4 py-2.5 rounded-xl border border-white/20">
@@ -641,9 +657,13 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
                             <td className="py-3.5 px-6 whitespace-nowrap">{getMethodBadge(rec.method)}</td>
                             <td className="py-3.5 px-6 text-slate-500 font-mono text-xs whitespace-nowrap">{rec.time}</td>
                             <td className="py-3.5 px-6 whitespace-nowrap">
-                              {rec.status === 'Present' ? (
+                              {String(rec.status).toUpperCase() === 'PRESENT' ? (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
                                   <CheckCircle2 className="w-3.5 h-3.5" /> Present
+                                </span>
+                              ) : String(rec.status).toUpperCase() === 'LATE' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">
+                                  <Clock className="w-3.5 h-3.5" /> Late
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800">
@@ -900,6 +920,24 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
                 </div>
               )}
 
+              {/* Institution Branding */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex items-center gap-4">
+                {institutionInfo?.logo_url ? (
+                  <img
+                    src={assetUrl(institutionInfo.logo_url)}
+                    alt="Institution logo"
+                    className="h-14 w-14 rounded-xl object-contain border border-slate-200 bg-white p-1 shrink-0"
+                  />
+                ) : (
+                  <img src="/campussync-logo.svg" alt="CampusSync logo" className="h-14 w-14 rounded-xl object-contain shrink-0" />
+                )}
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Institution</p>
+                  <h3 className="text-base font-bold text-slate-900 truncate">{institutionInfo?.college_name || 'CampusSync University'}</h3>
+                  <p className="text-xs text-slate-500 truncate">{institutionInfo?.academic_term || 'Academic Session 2026'}</p>
+                </div>
+              </div>
+
               {/* Profile Main Card */}
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 md:p-8 space-y-6">
                 {profileLoading ? (
@@ -927,7 +965,7 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
                         <h2 className="text-2xl font-extrabold text-slate-900">{displayName}</h2>
                         <p className="text-sm font-semibold text-blue-600 font-mono">{displayId}</p>
                         <p className="text-xs text-slate-500 font-medium">
-                          {profileData?.course || 'B.Tech CSE'} • {profileData?.year || '3rd Year'} ({profileData?.class || 'Section A'})
+                          {profileData?.course || 'B.Tech CSE'} • {profileData?.year || '3rd Year'} ({profileData?.class_name || 'No class'}{profileData?.section ? ` · Section ${profileData.section}` : ''})
                         </p>
                       </div>
                     </div>
@@ -942,13 +980,21 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
                         <p className="font-semibold font-mono text-slate-800">{displayId}</p>
                       </div>
                       <div className="space-y-1">
+                        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Roll Number</span>
+                        <p className="font-semibold font-mono text-slate-800">{profileData?.roll_number || '—'}</p>
+                      </div>
+                      <div className="space-y-1">
                         <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Department</span>
                         <p className="font-semibold text-slate-800">{displayDept}</p>
                       </div>
                       <div className="space-y-1">
+                        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Batch</span>
+                        <p className="font-semibold text-slate-800">{displayBatch}</p>
+                      </div>
+                      <div className="space-y-1">
                         <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Year & Section</span>
                         <p className="font-semibold text-slate-800">
-                          {profileData?.year || '3rd Year'} • {profileData?.class || 'CSE-3A'}
+                          {profileData?.year || '3rd Year'} • {profileData?.class_name || 'No class'}{profileData?.section ? ` · Section ${profileData.section}` : ''}
                         </p>
                       </div>
                       <div className="space-y-1">

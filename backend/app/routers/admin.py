@@ -1,7 +1,8 @@
 from typing import List, Optional, Any
 from datetime import datetime, timezone
+from pathlib import Path
 import uuid
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, File, Query, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import (
@@ -20,7 +21,10 @@ from app.models import (
     RFIDCard,
     BiometricIdentity,
     SystemSetting,
+    SessionStatus,
     AuthSession,
+    Batch,
+    Department,
 )
 from app.schemas import (
     AdminDashboardResponse,
@@ -45,6 +49,16 @@ from app.schemas import (
 )
 from app.security import get_password_hash
 from app.dependencies import require_admin
+from app.services.attendance_service import attendance_percentage
+from app.services.academics_service import (
+    BRANDING_DIR,
+    LOGO_EXTENSIONS,
+    MAX_LOGO_BYTES,
+    logo_url,
+    resolve_batch,
+    find_class_for_student,
+    resolve_department,
+)
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -68,8 +82,7 @@ def get_admin_dashboard(
 
     records = db.query(AttendanceRecord).all()
     total_records = len(records)
-    present_records = sum(1 for r in records if r.status == AttendanceStatus.PRESENT)
-    overall_attendance = round((present_records / total_records * 100), 1) if total_records > 0 else 0.0
+    overall_attendance = attendance_percentage(records)
 
     # Method distribution breakdown
     rfid_count = sum(1 for r in records if r.method == AttendanceMethod.RFID)
@@ -123,9 +136,7 @@ def list_students(
     students = query.order_by(Student.id.asc()).all()
     results = []
     for s in students:
-        rec_count = len(s.attendance_records)
-        pres_count = sum(1 for r in s.attendance_records if r.status == AttendanceStatus.PRESENT)
-        att_pct = round((pres_count / rec_count * 100), 1) if rec_count > 0 else 0.0
+        att_pct = attendance_percentage(s.attendance_records)
 
         results.append(StudentResponse(
             id=s.id,
@@ -137,6 +148,9 @@ def list_students(
             section=s.section,
             class_id=s.class_id,
             class_name=s.class_obj.name if s.class_obj else None,
+            batch_id=s.batch_id,
+            batch_name=s.batch_obj.name if s.batch_obj else None,
+            roll_number=s.roll_number,
             phone=s.phone,
             attendance_percentage=att_pct,
             created_at=s.created_at
@@ -168,6 +182,18 @@ def create_student(
     if target_class_id and not db.query(Class.id).filter(Class.id == target_class_id).first():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found in this institution.")
 
+    # 1b. Resolve the admin-defined department and batch the student belongs to.
+    department = resolve_department(db, payload.department, required=True)
+    batch = resolve_batch(db, payload.batch_id, department=department)
+
+    # 1c. A student with a batch/section but no explicit class still joins its section class.
+    if not target_class_id:
+        matched_class = find_class_for_student(
+            db, batch=batch, section=payload.section, department=department.name
+        )
+        if matched_class:
+            target_class_id = matched_class.id
+
     # 2. Create User Record
     user = User(
         name=payload.name.strip(),
@@ -185,10 +211,12 @@ def create_student(
         id=student_id,
         user_id=user.id,
         class_id=target_class_id,
-        department=payload.department,
+        batch_id=batch.id if batch else None,
+        department=department.name,
         course=payload.course,
-        year=payload.year,
+        year=batch.name if batch else payload.year,
         section=payload.section,
+        roll_number=payload.roll_number,
         phone=payload.phone
     )
     db.add(student)
@@ -221,6 +249,9 @@ def create_student(
         section=student.section,
         class_id=student.class_id,
         class_name=student.class_obj.name if student.class_obj else None,
+        batch_id=student.batch_id,
+        batch_name=student.batch_obj.name if student.batch_obj else None,
+        roll_number=student.roll_number,
         phone=student.phone,
         attendance_percentage=0.0,
         created_at=student.created_at
@@ -260,32 +291,54 @@ def update_student(
         ).update({AuthSession.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
 
     if payload.department:
-        student.department = payload.department
+        student.department = resolve_department(db, payload.department).name
+    if "batch_id" in payload.model_fields_set:
+        if payload.batch_id is None:
+            student.batch_id = None
+        else:
+            batch = resolve_batch(
+                db, payload.batch_id, department=resolve_department(db, student.department)
+            )
+            student.batch_id = batch.id
     if payload.course:
         student.course = payload.course
     if payload.year:
         student.year = payload.year
     if payload.section:
         student.section = payload.section
+    if payload.roll_number is not None:
+        student.roll_number = payload.roll_number.strip() or None
     if payload.phone is not None:
         student.phone = payload.phone
 
-    if payload.class_id:
-        if not db.query(Class.id).filter(Class.id == payload.class_id).first():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found in this institution.")
-        student.class_id = payload.class_id
+    if "class_id" in payload.model_fields_set:
+        # An explicit null unassigns the student; a value must be a real class.
+        if payload.class_id is None:
+            student.class_id = None
+        else:
+            if not db.query(Class.id).filter(Class.id == payload.class_id).first():
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found in this institution.")
+            student.class_id = payload.class_id
     elif payload.class_name:
         cls = db.query(Class).filter(Class.name.ilike(payload.class_name.strip())).first()
         if cls:
             student.class_id = cls.id
 
+    if student.class_id is None:
+        matched_class = find_class_for_student(
+            db,
+            batch=student.batch_obj,
+            section=student.section,
+            department=student.department,
+        )
+        if matched_class:
+            student.class_id = matched_class.id
+
     db.commit()
     db.refresh(user)
     db.refresh(student)
 
-    rec_count = len(student.attendance_records)
-    pres_count = sum(1 for r in student.attendance_records if r.status == AttendanceStatus.PRESENT)
-    att_pct = round((pres_count / rec_count * 100), 1) if rec_count > 0 else 0.0
+    att_pct = attendance_percentage(student.attendance_records)
 
     return StudentResponse(
         id=student.id,
@@ -297,6 +350,9 @@ def update_student(
         section=student.section,
         class_id=student.class_id,
         class_name=student.class_obj.name if student.class_obj else None,
+        batch_id=student.batch_id,
+        batch_name=student.batch_obj.name if student.batch_obj else None,
+        roll_number=student.roll_number,
         phone=student.phone,
         attendance_percentage=att_pct,
         created_at=student.created_at
@@ -390,6 +446,25 @@ def _assign_teacher_subjects(db: Session, teacher_id: str, subjects_list: List[s
     db.commit()
 
 
+def _resolve_teacher_departments(
+    db: Session, departments: Optional[List[str]], fallback: Optional[str] = None
+) -> tuple[str, Optional[str]]:
+    """Resolve the primary department and the extra departments a faculty member works in."""
+    names: List[str] = []
+    for value in departments or ([fallback] if fallback else []):
+        if not value or not str(value).strip():
+            continue
+        name = resolve_department(db, str(value).strip(), required=True).name
+        if name.lower() not in {item.lower() for item in names}:
+            names.append(name)
+    if not names:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Choose at least one department for the faculty member.",
+        )
+    return names[0], (", ".join(names[1:]) or None)
+
+
 @router.get("/teachers", response_model=List[TeacherResponse])
 def list_teachers(
     search: Optional[str] = Query(None),
@@ -419,6 +494,7 @@ def list_teachers(
             name=t.user.name,
             email=t.user.email,
             department=t.department,
+            departments=t.department_list,
             phone=t.phone,
             subjects=subjs,
             created_at=t.created_at
@@ -451,10 +527,14 @@ def create_teacher(
     db.commit()
     db.refresh(user)
 
+    primary_department, extra_departments = _resolve_teacher_departments(
+        db, payload.departments, payload.department
+    )
     teacher = Teacher(
         id=teacher_id,
         user_id=user.id,
-        department=payload.department,
+        department=primary_department,
+        extra_departments=extra_departments,
         phone=payload.phone
     )
     db.add(teacher)
@@ -477,6 +557,7 @@ def create_teacher(
         name=user.name,
         email=user.email,
         department=teacher.department,
+        departments=teacher.department_list,
         phone=teacher.phone,
         subjects=assigned_subjects,
         created_at=teacher.created_at
@@ -515,8 +596,12 @@ def update_teacher(
             AuthSession.revoked_at.is_(None),
         ).update({AuthSession.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
 
-    if payload.department:
-        teacher.department = payload.department
+    if payload.departments is not None or payload.department:
+        primary_department, extra_departments = _resolve_teacher_departments(
+            db, payload.departments, payload.department
+        )
+        teacher.department = primary_department
+        teacher.extra_departments = extra_departments
     if payload.phone is not None:
         teacher.phone = payload.phone
 
@@ -540,6 +625,7 @@ def update_teacher(
         name=user.name,
         email=user.email,
         department=teacher.department,
+        departments=teacher.department_list,
         phone=teacher.phone,
         subjects=assigned_subjects,
         created_at=teacher.created_at
@@ -595,6 +681,8 @@ def list_classes(
             year=c.year,
             section=c.section,
             department=c.department,
+            batch_id=c.batch_id,
+            batch_name=c.batch_name,
             created_at=c.created_at,
             total_students=st_count
         ))
@@ -612,11 +700,15 @@ def create_class(
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Class section name already exists.")
 
+    department = resolve_department(db, payload.department, required=True)
+    batch = resolve_batch(db, payload.batch_id, department=department)
+
     new_class = Class(
         name=payload.name.strip(),
-        year=payload.year,
-        section=payload.section,
-        department=payload.department
+        year=batch.name if batch else payload.year,
+        section=(payload.section or "").strip()[:10],
+        department=department.name,
+        batch_id=batch.id if batch else None,
     )
     db.add(new_class)
     db.commit()
@@ -628,6 +720,8 @@ def create_class(
         year=new_class.year,
         section=new_class.section,
         department=new_class.department,
+        batch_id=new_class.batch_id,
+        batch_name=new_class.batch_name,
         created_at=new_class.created_at,
         total_students=0
     )
@@ -653,10 +747,20 @@ def update_class(
 
     if payload.year:
         cls.year = payload.year
-    if payload.section:
-        cls.section = payload.section
+    if payload.section is not None:
+        cls.section = payload.section.strip()[:10]
     if payload.department:
-        cls.department = payload.department
+        cls.department = resolve_department(db, payload.department).name
+
+    if "batch_id" in payload.model_fields_set:
+        if payload.batch_id is None:
+            cls.batch_id = None
+        else:
+            batch = resolve_batch(
+                db, payload.batch_id, department=resolve_department(db, cls.department)
+            )
+            cls.batch_id = batch.id
+            cls.year = batch.name
 
     db.commit()
     db.refresh(cls)
@@ -668,6 +772,8 @@ def update_class(
         year=cls.year,
         section=cls.section,
         department=cls.department,
+        batch_id=cls.batch_id,
+        batch_name=cls.batch_name,
         created_at=cls.created_at,
         total_students=st_count
     )
@@ -741,7 +847,7 @@ def create_subject(
     new_subject = Subject(
         code=payload.code.strip().upper(),
         name=payload.name.strip(),
-        department=payload.department
+        department=resolve_department(db, payload.department, required=True).name
     )
     db.add(new_subject)
     db.commit()
@@ -771,7 +877,7 @@ def update_subject(
     if payload.name:
         subj.name = payload.name.strip()
     if payload.department:
-        subj.department = payload.department
+        subj.department = resolve_department(db, payload.department).name
 
     db.commit()
     db.refresh(subj)
@@ -922,7 +1028,7 @@ def create_attendance_record_admin(
             teacher_id=teacher_id,
             class_id=target_class_id,
             subject_id=target_subject_id,
-            status=SessionStatus.COMPLETED
+            status=SessionStatus.CLOSED
         )
         db.add(session)
         db.commit()
@@ -1019,12 +1125,8 @@ def delete_attendance_record_admin(
 # SYSTEM SETTINGS & MULTI-INSTITUTION BRANDING
 # ==============================================================================
 
-@router.get("/settings", response_model=SystemSettingsResponse)
-@router.get("/settings/public", response_model=SystemSettingsResponse)
-def get_system_settings(
-    db: Session = Depends(get_db)
-):
-    """Retrieve institutional attendance policy and college branding configuration."""
+def _read_system_settings(db: Session) -> SystemSettingsResponse:
+    """Build the institutional settings payload from stored key/value rows."""
     settings = db.query(SystemSetting).all()
     setting_map = {s.key: s.value for s in settings}
 
@@ -1037,8 +1139,24 @@ def get_system_settings(
         session_timeout_minutes=int(setting_map.get("session_timeout_minutes", "60")),
         dual_factor_required=setting_map.get("dual_factor_required", "true").lower() == "true",
         support_email=setting_map.get("support_email", "admin@campussync.edu"),
-        system_tagline=setting_map.get("system_tagline", "Smart Multi-Modal Attendance & Campus Management System")
+        system_tagline=setting_map.get("system_tagline", "Smart Multi-Modal Attendance & Campus Management System"),
+        logo_url=logo_url(),
     )
+
+
+@router.get("/settings", response_model=SystemSettingsResponse)
+def get_system_settings(
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Retrieve institutional attendance policy and branding for administrators."""
+    return _read_system_settings(db)
+
+
+@router.get("/settings/public", response_model=SystemSettingsResponse)
+def get_public_system_settings(db: Session = Depends(get_db)):
+    """Public read-only branding used by the sign-in screen."""
+    return _read_system_settings(db)
 
 
 @router.put("/settings", response_model=SystemSettingsResponse)
@@ -1058,7 +1176,49 @@ def update_system_settings(
             db.add(SystemSetting(key=key, value=val_str))
 
     db.commit()
-    return get_system_settings(db)
+    return _read_system_settings(db)
+
+
+@router.post("/settings/logo", response_model=SystemSettingsResponse)
+async def upload_institution_logo(
+    logo: UploadFile = File(...),
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Upload the institution logo shown on every dashboard and profile."""
+    suffix = Path((logo.filename or "").replace("\\", "/").split("/")[-1]).suffix.lower()
+    if suffix not in LOGO_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Logo must be a PNG, JPEG, or WebP image.")
+
+    data = await logo.read(MAX_LOGO_BYTES + 1)
+    if len(data) > MAX_LOGO_BYTES:
+        raise HTTPException(status_code=413, detail="Logo must be smaller than 3 MB.")
+
+    is_webp = suffix == ".webp" and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    is_known = (
+        (suffix == ".png" and data.startswith(b"\x89PNG\r\n\x1a\n"))
+        or (suffix in {".jpg", ".jpeg"} and data.startswith(b"\xff\xd8\xff"))
+    )
+    if not (is_known or is_webp):
+        raise HTTPException(status_code=415, detail="That file is not a valid PNG, JPEG, or WebP image.")
+
+    BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+    for existing in BRANDING_DIR.glob("logo.*"):
+        existing.unlink(missing_ok=True)
+    (BRANDING_DIR / f"logo{suffix}").write_bytes(data)
+
+    return _read_system_settings(db)
+
+
+@router.delete("/settings/logo", response_model=SystemSettingsResponse)
+def delete_institution_logo(
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Remove the uploaded logo and fall back to the default mark."""
+    for existing in BRANDING_DIR.glob("logo.*"):
+        existing.unlink(missing_ok=True)
+    return _read_system_settings(db)
 
 
 # ==============================================================================

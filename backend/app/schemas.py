@@ -76,7 +76,8 @@ class CourseMaterialCreate(BaseModel):
 class CourseMaterialUpdate(BaseModel):
     title: str = Field(..., min_length=1, max_length=180)
     content_type: Literal["text/plain", "text/markdown"] = "text/markdown"
-    content: str = Field(..., min_length=20, max_length=100000)
+    # Video-only posts have no notes; the router enforces notes-or-video.
+    content: str = Field("", max_length=100000)
 
 class CourseMaterialAttachmentResponse(BaseModel):
     id: str
@@ -184,11 +185,68 @@ class UserResponse(UserBase):
 # CLASS & SUBJECT SCHEMAS
 # ==============================================================================
 
+# ==============================================================================
+# DEPARTMENT & BATCH SCHEMAS
+# ==============================================================================
+
+class DepartmentBase(BaseModel):
+    code: str = Field(..., min_length=2, max_length=20)
+    name: str = Field(..., min_length=2, max_length=120)
+
+
+class DepartmentCreate(DepartmentBase):
+    pass
+
+
+class DepartmentUpdate(BaseModel):
+    code: Optional[str] = Field(None, min_length=2, max_length=20)
+    name: Optional[str] = Field(None, min_length=2, max_length=120)
+
+
+class DepartmentResponse(DepartmentBase):
+    id: int
+    created_at: datetime
+    batch_count: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BatchBase(BaseModel):
+    name: str = Field(..., min_length=4, max_length=40, description="Admission year range, e.g. 2024-2028")
+    department_id: int
+    start_year: Optional[int] = Field(None, ge=1900, le=2200)
+    end_year: Optional[int] = Field(None, ge=1900, le=2200)
+
+
+class BatchCreate(BatchBase):
+    pass
+
+
+class BatchUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=4, max_length=40)
+    department_id: Optional[int] = None
+    start_year: Optional[int] = Field(None, ge=1900, le=2200)
+    end_year: Optional[int] = Field(None, ge=1900, le=2200)
+
+
+class BatchResponse(BatchBase):
+    id: int
+    department_name: Optional[str] = None
+    department_code: Optional[str] = None
+    class_count: Optional[int] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# CLASS & SUBJECT SCHEMAS
+# ==============================================================================
+
 class ClassBase(BaseModel):
     name: str
     year: str = "3rd Year"
     section: str = "A"
     department: str = "Computer Science & Engineering"
+    batch_id: Optional[int] = None
 
 
 class ClassCreate(ClassBase):
@@ -200,6 +258,7 @@ class ClassUpdate(BaseModel):
     year: Optional[str] = None
     section: Optional[str] = None
     department: Optional[str] = None
+    batch_id: Optional[int] = None
 
 
 class ClassResponse(ClassBase):
@@ -207,6 +266,7 @@ class ClassResponse(ClassBase):
     created_at: datetime
     total_students: Optional[int] = None
     subjects: List[str] = []
+    batch_name: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -250,7 +310,9 @@ class StudentBase(BaseModel):
     course: str = "B.Tech CSE"
     year: str = "3rd Year"
     section: str = "A"
+    roll_number: Optional[str] = None
     phone: Optional[str] = None
+    batch_id: Optional[int] = None
 
 
 class StudentCreate(StudentBase):
@@ -275,9 +337,19 @@ class StudentUpdate(BaseModel):
     course: Optional[str] = None
     year: Optional[str] = None
     section: Optional[str] = None
+    roll_number: Optional[str] = None
     phone: Optional[str] = None
     class_id: Optional[int] = None
     class_name: Optional[str] = None
+    batch_id: Optional[int] = None
+
+    @field_validator("password", mode="before")
+    @classmethod
+    def blank_password_keeps_current(cls, value):
+        """An untouched (blank) password field means "keep the current password"."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("password")
     @classmethod
@@ -302,11 +374,115 @@ class StudentResponse(BaseModel):
     section: str
     class_id: Optional[int] = None
     class_name: Optional[str] = None
+    batch_id: Optional[int] = None
+    batch_name: Optional[str] = None
+    roll_number: Optional[str] = None
     phone: Optional[str] = None
     attendance_percentage: Optional[float] = 0.0
     biometrics: Optional[BiometricsStatus] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# PUBLIC STUDENT REGISTRATION SCHEMAS
+# ==============================================================================
+
+class RegistrationLinkCreate(BaseModel):
+    label: Optional[str] = Field(None, max_length=120)
+
+
+class RegistrationLinkUpdate(BaseModel):
+    label: Optional[str] = Field(None, max_length=120)
+    is_active: Optional[bool] = None
+
+
+class RegistrationLinkResponse(BaseModel):
+    id: str
+    token: str
+    label: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+    request_count: int = 0
+    pending_count: int = 0
+    path: str
+
+
+class RegistrationBatchOption(BaseModel):
+    id: int
+    name: str
+    department_name: Optional[str] = None
+    sections: List[str] = Field(default_factory=list)
+
+
+class RegistrationClassOption(BaseModel):
+    """A class created without an admission batch, still selectable by applicants."""
+    id: int
+    name: str
+    section: Optional[str] = None
+    department_name: Optional[str] = None
+
+
+class PublicRegistrationInfo(BaseModel):
+    """What the public form needs: branding plus the departments and batches it may choose from."""
+    institution_name: str
+    institution_short_name: Optional[str] = None
+    logo_url: Optional[str] = None
+    is_active: bool
+    link_label: Optional[str] = None
+    departments: List[str] = Field(default_factory=list)
+    batches: List[RegistrationBatchOption] = Field(default_factory=list)
+    standalone_classes: List[RegistrationClassOption] = Field(default_factory=list)
+    sections: List[str] = Field(default_factory=list)
+
+
+class RegistrationSubmit(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    email: EmailStr
+    password: str = Field(..., min_length=12, max_length=72, description="Password the student will sign in with")
+    registration_number: str = Field(..., min_length=2, max_length=50, description="Used as the student ID to sign in")
+    roll_number: str = Field(..., min_length=1, max_length=30)
+    department: Optional[str] = Field(None, max_length=100, description="Department the applicant belongs to")
+    batch_id: Optional[int] = None
+    class_id: Optional[int] = None
+    section: str = Field(default="", max_length=10)
+
+    @field_validator("password")
+    @classmethod
+    def password_byte_length(cls, value: str) -> str:
+        return _validate_password_bytes(value)
+
+
+class RegistrationStatusResponse(BaseModel):
+    reference: str
+    name: str
+    status: str
+    decision_reason: Optional[str] = None
+    created_at: datetime
+    decided_at: Optional[datetime] = None
+
+
+class RegistrationRequestResponse(BaseModel):
+    id: str
+    name: str
+    email: EmailStr
+    registration_number: str
+    roll_number: str
+    department: str
+    batch_id: Optional[int] = None
+    batch_name: Optional[str] = None
+    section: Optional[str] = None
+    course: str
+    status: str
+    decision_reason: Optional[str] = None
+    student_id: Optional[str] = None
+    link_label: Optional[str] = None
+    created_at: datetime
+    decided_at: Optional[datetime] = None
+
+
+class RegistrationReject(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
 
 
 # ==============================================================================
@@ -323,6 +499,7 @@ class TeacherCreate(TeacherBase):
     name: str
     email: EmailStr
     password: str = Field(..., min_length=12, max_length=72)
+    departments: Optional[List[str]] = None
     subjects: Optional[List[str]] = None
 
     @field_validator("password")
@@ -336,8 +513,17 @@ class TeacherUpdate(BaseModel):
     email: Optional[EmailStr] = None
     password: Optional[str] = Field(None, min_length=12, max_length=72)
     department: Optional[str] = None
+    departments: Optional[List[str]] = None
     phone: Optional[str] = None
     subjects: Optional[List[str]] = None
+
+    @field_validator("password", mode="before")
+    @classmethod
+    def blank_password_keeps_current(cls, value):
+        """An untouched (blank) password field means "keep the current password"."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("password")
     @classmethod
@@ -350,6 +536,7 @@ class TeacherResponse(BaseModel):
     name: str
     email: EmailStr
     department: str
+    departments: List[str] = []
     phone: Optional[str] = None
     subjects: List[str] = []
     created_at: datetime
@@ -613,6 +800,44 @@ class ScheduleItem(BaseModel):
     status: str
 
 
+class SubjectStudentAttendance(BaseModel):
+    student_id: str
+    student_name: str
+    class_name: Optional[str] = None
+    present: int
+    total: int
+    percentage: float
+
+
+class SubjectAttendanceResponse(BaseModel):
+    class_id: int
+    class_name: str
+    subject_id: int
+    subject_name: str
+    sessions_held: int
+    total_records: int
+    students: List[SubjectStudentAttendance] = Field(default_factory=list)
+
+
+class TeacherAssignmentCreate(BaseModel):
+    teacher_id: str
+    class_id: int
+    subject_ids: List[int] = Field(..., min_length=1)
+
+
+class TeacherAssignmentResponse(BaseModel):
+    id: int
+    teacher_id: str
+    teacher_name: Optional[str] = None
+    class_id: int
+    class_name: Optional[str] = None
+    subject_id: int
+    subject_name: Optional[str] = None
+    subject_code: Optional[str] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 class TeacherClassAttendance(BaseModel):
     class_id: int
     class_name: str
@@ -647,6 +872,7 @@ class AdminDashboardResponse(BaseModel):
 class SystemSettingsResponse(BaseModel):
     college_name: str = "CampusSync University"
     college_short_name: str = "CampusSync"
+    logo_url: Optional[str] = None
     academic_term: str = "Academic Session 2026"
     min_attendance_pct: int = 75
     late_threshold_minutes: int = 15

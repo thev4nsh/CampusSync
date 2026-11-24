@@ -51,6 +51,12 @@ class SessionStatus(str, enum.Enum):
     CLOSED = "closed"
 
 
+class RegistrationStatus(str, enum.Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 # ==============================================================================
 # DATABASE MODELS
 # ==============================================================================
@@ -116,6 +122,52 @@ class AIUsageDaily(Base):
     __table_args__ = (UniqueConstraint("user_id", "usage_date", name="uq_ai_usage_user_date"),)
 
 
+class Department(TenantScoped, Base):
+    """
+    Admin-managed academic department (e.g. CSE - Computer Science & Engineering).
+    Classes, subjects, students and faculty all reference a department by name.
+    """
+    __tablename__ = "departments"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    code = Column(String(20), nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (UniqueConstraint("institution_id", "code", name="uq_departments_institution_code"),)
+
+    batches = relationship("Batch", back_populates="department_obj", cascade="all, delete-orphan")
+
+
+class Batch(TenantScoped, Base):
+    """
+    Admission batch of one department, e.g. 2024-2028 for CSE.
+    """
+    __tablename__ = "batches"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    name = Column(String(40), nullable=False, index=True)
+    start_year = Column(Integer, nullable=True)
+    end_year = Column(Integer, nullable=True)
+    department_id = Column(Integer, ForeignKey("departments.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("institution_id", "department_id", "name", name="uq_batches_institution_department_name"),
+    )
+
+    department_obj = relationship("Department", back_populates="batches")
+    classes = relationship("Class", back_populates="batch_obj")
+
+    @property
+    def department_name(self) -> str | None:
+        return self.department_obj.name if self.department_obj else None
+
+    @property
+    def department_code(self) -> str | None:
+        return self.department_obj.code if self.department_obj else None
+
+
 class Class(TenantScoped, Base):
     """
     Academic class / batch section (e.g. CSE-3A).
@@ -127,6 +179,7 @@ class Class(TenantScoped, Base):
     year = Column(String(50), nullable=False)
     section = Column(String(10), nullable=False)
     department = Column(String(100), nullable=False)
+    batch_id = Column(Integer, ForeignKey("batches.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     __table_args__ = (UniqueConstraint("institution_id", "name", name="uq_classes_institution_name"),)
@@ -135,6 +188,11 @@ class Class(TenantScoped, Base):
     students = relationship("Student", back_populates="class_obj")
     teacher_assignments = relationship("TeacherSubjectAssignment", back_populates="class_obj")
     sessions = relationship("AttendanceSession", back_populates="class_obj")
+    batch_obj = relationship("Batch", back_populates="classes")
+
+    @property
+    def batch_name(self) -> str | None:
+        return self.batch_obj.name if self.batch_obj else None
 
 
 class Subject(TenantScoped, Base):
@@ -165,6 +223,8 @@ class Teacher(TenantScoped, Base):
     id = Column(String(50), primary_key=True, index=True)  # e.g. TCH101
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     department = Column(String(100), nullable=False)
+    # Other departments the faculty member is assigned to, comma separated.
+    extra_departments = Column(String(400), nullable=True)
     phone = Column(String(25), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -177,6 +237,16 @@ class Teacher(TenantScoped, Base):
     def name(self) -> str:
         return self.user.name if self.user else self.id
 
+    @property
+    def department_list(self) -> list[str]:
+        """The primary department followed by every other department this teacher works in."""
+        values = [self.department] if self.department else []
+        for item in (self.extra_departments or "").split(","):
+            name = item.strip()
+            if name and name.lower() not in {value.lower() for value in values}:
+                values.append(name)
+        return values
+
 
 class Student(TenantScoped, Base):
     """
@@ -187,16 +257,19 @@ class Student(TenantScoped, Base):
     id = Column(String(50), primary_key=True, index=True)  # e.g. CSE23001
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     class_id = Column(Integer, ForeignKey("classes.id", ondelete="SET NULL"), nullable=True)
+    batch_id = Column(Integer, ForeignKey("batches.id", ondelete="SET NULL"), nullable=True, index=True)
     department = Column(String(100), nullable=False)
     course = Column(String(100), nullable=False, default="B.Tech CSE")
     year = Column(String(50), nullable=False, default="3rd Year")
     section = Column(String(10), nullable=False, default="A")
+    roll_number = Column(String(30), nullable=True)
     phone = Column(String(25), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="student_profile")
     class_obj = relationship("Class", back_populates="students")
+    batch_obj = relationship("Batch")
     rfid_card = relationship("RFIDCard", back_populates="student", uselist=False, cascade="all, delete-orphan")
     biometric_identity = relationship("BiometricIdentity", back_populates="student", uselist=False, cascade="all, delete-orphan")
     attendance_records = relationship("AttendanceRecord", back_populates="student", cascade="all, delete-orphan")
@@ -433,6 +506,66 @@ class BiometricIdentity(TenantScoped, Base):
     student = relationship("Student", back_populates="biometric_identity")
 
 
+class RegistrationLink(TenantScoped, Base):
+    """
+    Shareable public link an institution hands to applicants.
+
+    Anyone holding the token can open the public admission form; submitted
+    details wait as a RegistrationRequest until an admin approves or rejects them.
+    """
+    __tablename__ = "registration_links"
+
+    id = Column(String(36), primary_key=True, index=True)
+    token = Column(String(64), unique=True, index=True, nullable=False)
+    label = Column(String(120), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    requests = relationship("RegistrationRequest", back_populates="link", cascade="all, delete-orphan")
+
+    @property
+    def request_count(self) -> int:
+        return len(self.requests or [])
+
+
+class RegistrationRequest(TenantScoped, Base):
+    """
+    One student's self-submitted admission details, awaiting an admin decision.
+
+    The password is stored hashed exactly like an account password and is only
+    turned into a User/Student account when an admin approves the request.
+    """
+    __tablename__ = "registration_requests"
+
+    id = Column(String(36), primary_key=True, index=True)
+    link_id = Column(String(36), ForeignKey("registration_links.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    email = Column(String(150), nullable=False, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    registration_number = Column(String(50), nullable=False, index=True)
+    roll_number = Column(String(30), nullable=False)
+    department = Column(String(100), nullable=False)
+    batch_id = Column(Integer, ForeignKey("batches.id", ondelete="SET NULL"), nullable=True, index=True)
+    batch_name = Column(String(40), nullable=True)
+    section = Column(String(10), nullable=True)
+    course = Column(String(100), nullable=False, default="B.Tech CSE")
+    status = Column(
+        Enum(RegistrationStatus, name="registration_status", native_enum=False),
+        default=RegistrationStatus.PENDING,
+        nullable=False,
+        index=True,
+    )
+    decision_reason = Column(Text, nullable=True)
+    decided_at = Column(DateTime(timezone=True), nullable=True)
+    decided_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    student_id = Column(String(50), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    link = relationship("RegistrationLink", back_populates="requests")
+    batch_obj = relationship("Batch")
+
+
 class SystemSetting(TenantScoped, Base):
     """
     Institutional rules and system configuration.
@@ -484,7 +617,9 @@ def _stamp_institution_scope(session, _flush_context, _instances):
         return
 
     references = {
-        Student: (("user_id", User, "id"), ("class_id", Class, "id")),
+        Student: (("user_id", User, "id"), ("class_id", Class, "id"), ("batch_id", Batch, "id")),
+        Batch: (("department_id", Department, "id"),),
+        RegistrationRequest: (("link_id", RegistrationLink, "id"), ("batch_id", Batch, "id")),
         Teacher: (("user_id", User, "id"),),
         TeacherSubjectAssignment: (
             ("teacher_id", Teacher, "id"), ("subject_id", Subject, "id"), ("class_id", Class, "id"),
@@ -499,10 +634,12 @@ def _stamp_institution_scope(session, _flush_context, _instances):
         AttendanceSession: (
             ("teacher_id", Teacher, "id"), ("class_id", Class, "id"), ("subject_id", Subject, "id"),
         ),
+        Class: (("batch_id", Batch, "id"),),
         AttendanceRecord: (
             ("student_id", Student, "id"), ("session_id", AttendanceSession, "id"), ("device_id", Device, "id"),
         ),
         RFIDCard: (("student_id", Student, "id"),),
+        RegistrationLink: (("created_by_id", User, "id"),),
         BiometricIdentity: (("student_id", Student, "id"),),
     }
     pending = list(session.new)
