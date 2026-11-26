@@ -36,6 +36,7 @@ import { studentApi, announcementApi, assetUrl, ApiError } from '../api/api';
 import CourseMaterials from '../components/CourseMaterials';
 import Announcements from '../components/Announcements';
 import Classrooms from '../components/Classrooms';
+import FaceEnrollmentCard from '../components/FaceEnrollmentCard';
 
 const STUDENT_SECTIONS = ['dashboard', 'classrooms', 'materials', 'announcements', 'attendance', 'history', 'profile'];
 
@@ -1014,7 +1015,7 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 md:p-8 space-y-4">
                 <div>
                   <h3 className="text-base font-bold text-slate-900">Enrolled Multi-Modal Biometric Identifiers</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">Hardware authorization credentials linked to your Student Profile</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Optional biometric methods. Face enrollment requires your consent and can be removed at any time.</p>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1049,7 +1050,7 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
                           : 'text-slate-500'
                       }`}>
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        {profileData?.biometrics?.face ? 'Feature Vector Active' : 'Status: Backend Pending'}
+                        {profileData?.biometrics?.face ? 'Opt-in enrollment ready' : 'Optional enrollment'}
                       </span>
                     </div>
                   </div>
@@ -1072,6 +1073,7 @@ export default function Student({ currentUser, onLogout, showToast, institutionI
                     </div>
                   </div>
                 </div>
+                <FaceEnrollmentCard />
               </div>
             </div>
           )}

@@ -21,13 +21,12 @@ The CampusSync backend operates as the central institutional data authority, sec
 │  └─ CORS & Exception Middleware                             │
 └──────────────┬──────────────────────────────▲───────────────┘
                │                              │
-               ▼                              │ [IoT REST / HTTPS]
-┌──────────────────────────────┐ ┌────────────┴───────────────┐
-│     PostgreSQL Database      │ │ Physical Terminal Network  │
-│  (ACID Relational Storage)   │ │  ├─ ESP32 + RFID Reader    │
-│                              │ │  ├─ Biometric Fingerprint  │
-│                              │ │  └─ Edge AI Face Camera    │
-└──────────────────────────────┘ └────────────────────────────┘
+               ▼                              ▲
+┌──────────────────────────────┐              │ [HTTPS / REST]
+│     PostgreSQL Database      │   ┌──────────┴───────────────┐
+│  (ACID Relational Storage)   │   │ RFID / fingerprint gear │
+└──────────────────────────────┘   │ Teacher browser camera  │
+                                   └──────────────────────────┘
 ```
 
 ---
@@ -127,11 +126,11 @@ JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=15
 REFRESH_TOKEN_EXPIRE_DAYS=7
 
-# OpenAI course-material summaries and grounded Q&A
-OPENAI_API_KEY=
-OPENAI_MODEL=gpt-6-luna
-OPENAI_SUMMARY_MAX_OUTPUT_TOKENS=1200
-OPENAI_ANSWER_MAX_OUTPUT_TOKENS=900
+# Gemini course-material summaries and grounded Q&A
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_SUMMARY_MAX_OUTPUT_TOKENS=1200
+GEMINI_ANSWER_MAX_OUTPUT_TOKENS=900
 AI_DAILY_LIMIT_STUDENT=25
 AI_DAILY_LIMIT_STAFF=100
 
@@ -200,11 +199,21 @@ All attendance channels (RFID, Fingerprint, Face Recognition, Manual) pass throu
 ## 🔒 Security Practices
 * **No Plaintext Passwords:** Passwords hashed with `bcrypt` (work factor 12).
 * **JWT Expiration:** Short-lived access tokens with secure refresh token rotation.
-* **No Biometric Images Stored:** Fingerprint template indices and face embedding reference IDs stored only; raw biometrics are never saved.
+* **Opt-in face attendance prototype:** Students explicitly consent and enroll three samples from their own camera. The API stores Fernet-encrypted normalized face templates, never raw camera frames. Teacher scans return a candidate only; attendance is recorded only after the teacher confirms the person in front of them. Matching uses OpenCV LBPH and is a demonstration-grade matcher without liveness or anti-spoofing.
+
+### Enabling the local face attendance prototype
+
+Install the backend requirements, generate a private Fernet key, and place it in `backend/.env` as `BIOMETRIC_ENCRYPTION_KEY` (do not commit that file or key). For example:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Set `FACE_MATCH_THRESHOLD=60` (lower values are stricter), then run `alembic upgrade head` from `backend/`. The student profile offers optional enrollment; the teacher's active attendance session offers camera scanning and explicit confirmation. Browser camera access requires localhost or HTTPS. Students can remove their enrollment at any time and use the existing attendance methods instead. Back up the encryption key securely: templates cannot be read if the key is lost.
 * **CORS Whitelisting:** Restricted to configured frontend domains.
 * **Institution Isolation:** Authenticated ORM queries and writes are scoped to the user's college; existing records are assigned to the first CampusSync institution by migration.
-* **AI Data Handling:** Only readable course material is sent to the OpenAI API. Calls disable stored Responses, exclude grades and biometric data, enforce daily request caps, and verify returned source quotes before displaying answers.
+* **AI Data Handling:** Only readable course material and the student's question are sent to the Gemini API. Grades and biometric data are excluded, daily request caps are enforced, and returned source quotes are checked against the selected passages before answers are displayed.
 
 ### AI Course Study Tools
 
-Teachers can post text notes or upload readable PDF, Office, text, SRT, and VTT files to an assigned class. A YouTube lecture link can be attached with a teacher-provided caption/transcript file; arbitrary YouTube caption scraping is not used. Students in that class can request a cached summary or ask a question; the backend retrieves relevant passages and returns exact matching source excerpts. Scanned PDFs and image-only files need OCR before they can be used for AI. Store the API key only in `backend/.env` or a deployment secret, never in a `VITE_` variable. Check `GET /api/ai/status` while signed in to verify configuration and daily usage.
+Teachers can post text notes or upload readable PDF, Office, text, SRT, and VTT files to an assigned class. A YouTube lecture link can be attached with a teacher-provided caption/transcript file; arbitrary YouTube caption scraping is not used. Students in that class can request a cached summary or ask a question; the backend retrieves relevant passages and returns exact matching source excerpts. Scanned PDFs and image-only files need OCR before they can be used for AI. Set `GEMINI_API_KEY` in `backend/.env`; store it only in that file or a deployment secret, never in a `VITE_` variable. Check `GET /api/ai/status` while signed in to verify configuration and daily usage.

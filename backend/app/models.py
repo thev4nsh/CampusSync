@@ -488,8 +488,8 @@ class RFIDCard(TenantScoped, Base):
 
 class BiometricIdentity(TenantScoped, Base):
     """
-    Secure biometric references (fingerprint template index, face embedding ID).
-    Raw image/biometric scans are NEVER stored directly in the database.
+    Secure biometric references. Face templates are encrypted before storage;
+    raw camera frames are never persisted.
     """
     __tablename__ = "biometric_identities"
 
@@ -499,6 +499,8 @@ class BiometricIdentity(TenantScoped, Base):
     fingerprint_template_id = Column(String(100), nullable=True)
     face_enrolled = Column(Boolean, default=False, nullable=False)
     face_reference_id = Column(String(100), nullable=True)
+    face_templates_ciphertext = Column(Text, nullable=True)
+    face_consent_at = Column(DateTime(timezone=True), nullable=True)
     registered_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

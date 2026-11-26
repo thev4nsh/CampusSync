@@ -26,12 +26,17 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
-    OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = "gpt-4.1"
-    OPENAI_SUMMARY_MAX_OUTPUT_TOKENS: int = 1200
-    OPENAI_ANSWER_MAX_OUTPUT_TOKENS: int = 900
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
+    GEMINI_SUMMARY_MAX_OUTPUT_TOKENS: int = 1200
+    GEMINI_ANSWER_MAX_OUTPUT_TOKENS: int = 900
     AI_DAILY_LIMIT_STUDENT: int = 25
     AI_DAILY_LIMIT_STAFF: int = 100
+
+    # Face templates are encrypted at rest. Leave unset to keep face enrollment
+    # and recognition disabled until an institution provisions a private key.
+    BIOMETRIC_ENCRYPTION_KEY: Optional[str] = None
+    FACE_MATCH_THRESHOLD: float = 60.0
 
     # CORS Configuration
     ALLOWED_ORIGINS: Union[str, List[str]] = [
@@ -54,12 +59,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_runtime_security(self):
-        if not 128 <= self.OPENAI_SUMMARY_MAX_OUTPUT_TOKENS <= 4000:
-            raise ValueError("OPENAI_SUMMARY_MAX_OUTPUT_TOKENS must be between 128 and 4000.")
-        if not 128 <= self.OPENAI_ANSWER_MAX_OUTPUT_TOKENS <= 4000:
-            raise ValueError("OPENAI_ANSWER_MAX_OUTPUT_TOKENS must be between 128 and 4000.")
+        if not 128 <= self.GEMINI_SUMMARY_MAX_OUTPUT_TOKENS <= 4000:
+            raise ValueError("GEMINI_SUMMARY_MAX_OUTPUT_TOKENS must be between 128 and 4000.")
+        if not 128 <= self.GEMINI_ANSWER_MAX_OUTPUT_TOKENS <= 4000:
+            raise ValueError("GEMINI_ANSWER_MAX_OUTPUT_TOKENS must be between 128 and 4000.")
         if not 1 <= self.AI_DAILY_LIMIT_STUDENT <= 500 or not 1 <= self.AI_DAILY_LIMIT_STAFF <= 1000:
             raise ValueError("AI daily request limits are outside the allowed range.")
+        if not 20 <= self.FACE_MATCH_THRESHOLD <= 120:
+            raise ValueError("FACE_MATCH_THRESHOLD must be between 20 and 120.")
         if "*" in self.ALLOWED_ORIGINS:
             raise ValueError("ALLOWED_ORIGINS cannot contain '*' while credentialed requests are enabled.")
         if self.ENVIRONMENT.casefold() in {"production", "prod"}:

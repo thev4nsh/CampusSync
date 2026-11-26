@@ -44,7 +44,7 @@ def get_ai_status(
 ):
     limit = daily_limit_for(current_user)
     return {
-        "configured": bool(settings.OPENAI_API_KEY),
+        "configured": bool(settings.GEMINI_API_KEY),
         "requests_used_today": used_today(db, current_user.id),
         "daily_request_limit": limit,
     }

@@ -360,6 +360,7 @@ class StudentUpdate(BaseModel):
 class BiometricsStatus(BaseModel):
     fingerprint: bool = False
     face: bool = False
+    face_enrollment_samples: int = 0
     rfid: bool = False
     rfid_uid: Optional[str] = None
 
@@ -717,6 +718,13 @@ class FaceAttendanceRequest(BaseModel):
     session_id: Optional[str] = None
     confidence: Optional[float] = None
     timestamp: Optional[datetime] = None
+
+
+class FaceAttendanceConfirmRequest(BaseModel):
+    session_id: str
+    student_id: str
+    match_token: str
+    confirm_in_person: bool = False
 
 
 class AttendanceSubmissionResponse(BaseModel):

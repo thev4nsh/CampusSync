@@ -1,11 +1,14 @@
 from typing import List, Optional, Any
 from datetime import date, datetime, timedelta, timezone
+import json
 import uuid
 import zlib
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from jose import jwt, JWTError
 from app.database import get_db
+from app.config import settings
 from app.models import (
     AttendanceSession,
     AttendanceRecord,
@@ -30,10 +33,12 @@ from app.schemas import (
     RFIDAttendanceRequest,
     FingerprintAttendanceRequest,
     FaceAttendanceRequest,
+    FaceAttendanceConfirmRequest,
     AttendanceSubmissionResponse
 )
 from app.services.attendance_service import attendance_service
 from app.services.device_service import device_service
+from app.services.face_recognition_service import FaceRecognitionError, face_recognition_service
 from app.dependencies import (
     get_current_active_user,
     require_teacher,
@@ -591,29 +596,134 @@ def record_face_attendance(
     device: Device = Depends(get_authenticated_device),
     db: Session = Depends(get_db)
 ):
-    """
-    Direct endpoint for edge AI Face Recognition services stream.
-    Receives recognized Student ID and logs verified attendance.
-    """
-    _verify_ingest_device(device, payload.device_id, DeviceType.FACE_CAMERA)
-    device_service.update_device_heartbeat(db, device.id)
-
-    record, msg = attendance_service.process_attendance(
-        db=db,
-        student_id=payload.student_id,
-        method=AttendanceMethod.FACE,
-        session_id=payload.session_id,
-        device_id=payload.device_id,
-        timestamp=payload.timestamp
+    """Legacy edge-camera route retained for compatibility but no longer auto-marks attendance."""
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Automatic face attendance is disabled. Use the teacher camera match and in-person confirmation flow.",
     )
 
+
+@router.post("/face/recognize")
+async def recognize_face_candidate(
+    session_id: str = Form(...),
+    image: UploadFile = File(...),
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """Find a class-scoped face candidate; this endpoint never records attendance."""
+    session = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance session not found.")
+    if session.status != SessionStatus.ACTIVE:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This attendance session is closed.")
+    if not _can_view_session(db, session, current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot scan this attendance session.")
+
+    frame = await image.read(2_000_001)
+    if len(frame) > 2_000_000:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Camera frame must be under 2 MB.")
+
+    from app.models import BiometricIdentity
+    rows = db.query(Student, BiometricIdentity).join(
+        BiometricIdentity, BiometricIdentity.student_id == Student.id
+    ).filter(
+        Student.class_id == session.class_id,
+        BiometricIdentity.face_enrolled.is_(True),
+        BiometricIdentity.face_consent_at.isnot(None),
+    ).all()
+
+    enrolled = []
+    for student, biometric in rows:
+        try:
+            templates = json.loads(biometric.face_templates_ciphertext or "[]")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(templates, list):
+            enrolled.append((student.id, student.user.name if student.user else student.id, templates))
+
+    try:
+        match = face_recognition_service.recognize(frame, enrolled)
+    except FaceRecognitionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    if not match:
+        return {"matched": False, "message": "No enrolled face met the configured match threshold."}
+
+    now = datetime.now(timezone.utc)
+    match_token = jwt.encode({
+        "purpose": "face-attendance-candidate",
+        "session_id": session.id,
+        "student_id": match["student_id"],
+        "teacher_user_id": current_user.id,
+        "exp": now + timedelta(seconds=90),
+    }, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return {
+        "matched": True,
+        "student_id": match["student_id"],
+        "student_name": match["student_name"],
+        "distance": match["distance"],
+        "threshold": match["threshold"],
+        "match_token": match_token,
+        "expires_in_seconds": 90,
+        "requires_teacher_confirmation": True,
+    }
+
+
+@router.post("/face/confirm", response_model=AttendanceSubmissionResponse)
+def confirm_face_attendance_candidate(
+    payload: FaceAttendanceConfirmRequest,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """Record a face-assisted attendance mark only after explicit teacher confirmation."""
+    if not payload.confirm_in_person:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirm that you verified the student in person.")
+    try:
+        claims = jwt.decode(payload.match_token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+    except JWTError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="The face match has expired or is invalid.") from exc
+    if (
+        claims.get("purpose") != "face-attendance-candidate"
+        or claims.get("session_id") != payload.session_id
+        or claims.get("student_id") != payload.student_id
+        or claims.get("teacher_user_id") != current_user.id
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The match token does not belong to this teacher, student and session.")
+
+    session = db.query(AttendanceSession).filter(AttendanceSession.id == payload.session_id).first()
+    if not session or session.status != SessionStatus.ACTIVE:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This attendance session is missing or closed.")
+    if not _can_view_session(db, session, current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot confirm attendance for this session.")
+    student = db.query(Student).filter(
+        Student.id == payload.student_id,
+        Student.class_id == session.class_id,
+    ).first()
+    if not student:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="The candidate is not enrolled in this session's class.")
+
+    from app.models import BiometricIdentity
+    biometric = db.query(BiometricIdentity).filter(
+        BiometricIdentity.student_id == student.id,
+        BiometricIdentity.face_enrolled.is_(True),
+        BiometricIdentity.face_consent_at.isnot(None),
+    ).first()
+    if not biometric:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The student no longer has an active face enrollment.")
+
+    record, message = attendance_service.process_attendance(
+        db=db,
+        student_id=student.id,
+        method=AttendanceMethod.FACE,
+        session_id=session.id,
+    )
     return AttendanceSubmissionResponse(
         success=True,
-        message=msg,
+        message=message,
         student_name=record.student.user.name,
         student_id=record.student.id,
         status=record.status.value,
-        method="FACE"
+        method="FACE",
     )
 
 

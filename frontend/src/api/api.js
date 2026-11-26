@@ -367,6 +367,14 @@ export const studentApi = {
   getProfile: async () => {
     return await request('/students/profile');
   },
+  getFaceEnrollmentStatus: async () => await request('/students/me/face-enrollment'),
+  addFaceEnrollmentSample: async (imageBlob, consent) => {
+    const form = new FormData();
+    form.append('image', imageBlob, 'face-sample.jpg');
+    form.append('consent', String(Boolean(consent)));
+    return await request('/students/me/face-enrollment/samples', { method: 'POST', body: form });
+  },
+  revokeFaceEnrollment: async () => await request('/students/me/face-enrollment', { method: 'DELETE' }),
   getClassrooms: async () => await request('/students/classrooms'),
 };
 
@@ -502,6 +510,19 @@ export const teacherApi = {
   getSessionAttendance: async (sessionId) => {
     return await request(`/attendance/session/${sessionId}/live`);
   },
+
+  recognizeFace: async (sessionId, imageBlob) => {
+    const form = new FormData();
+    form.append('session_id', sessionId);
+    form.append('image', imageBlob, 'attendance-frame.jpg');
+    return await request('/attendance/face/recognize', { method: 'POST', body: form });
+  },
+
+  confirmFaceAttendance: async ({ sessionId, studentId, matchToken, confirmInPerson }) =>
+    await request('/attendance/face/confirm', {
+      method: 'POST',
+      body: { session_id: sessionId, student_id: studentId, match_token: matchToken, confirm_in_person: confirmInPerson },
+    }),
 
   /**
    * Submit manual attendance marks
@@ -876,6 +897,7 @@ export const deviceIntegrationApi = {
     });
   },
 
+  // Deprecated: the legacy device endpoint is disabled to prevent face-only auto-marking.
   recordFace: async ({ deviceId, deviceKey, studentId, confidence, timestamp }) => {
     return await request('/attendance/face', {
       method: 'POST',

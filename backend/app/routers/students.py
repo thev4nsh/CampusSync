@@ -1,7 +1,9 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, Query, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+import json
 from app.database import get_db
 from app.models import (
     Student,
@@ -10,7 +12,8 @@ from app.models import (
     AttendanceSession,
     Subject,
     TeacherSubjectAssignment,
-    AttendanceStatus
+    AttendanceStatus,
+    BiometricIdentity,
 )
 from app.schemas import (
     StudentResponse,
@@ -22,8 +25,93 @@ from app.schemas import (
 )
 from app.dependencies import get_current_student
 from app.services.attendance_service import attendance_percentage
+from app.services.face_recognition_service import (
+    FaceRecognitionError,
+    face_recognition_service,
+)
 
 router = APIRouter(prefix="/students", tags=["Students"])
+
+
+def _face_template_count(biometric: Optional[BiometricIdentity]) -> int:
+    if not biometric or not biometric.face_templates_ciphertext:
+        return 0
+    try:
+        values = json.loads(biometric.face_templates_ciphertext)
+        return len(values) if isinstance(values, list) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+@router.post("/me/face-enrollment/samples")
+async def add_my_face_enrollment_sample(
+    image: UploadFile = File(...),
+    consent: bool = Form(False),
+    student: Student = Depends(get_current_student),
+    db: Session = Depends(get_db),
+):
+    """Opt-in self-enrollment; only an encrypted normalized template is retained."""
+    raw = await image.read(2_000_001)
+    if not raw or len(raw) > 2_000_000:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Image must be under 2 MB.")
+
+    biometric = student.biometric_identity
+    if biometric is None:
+        biometric = BiometricIdentity(student_id=student.id, institution_id=student.institution_id)
+        db.add(biometric)
+        db.flush()
+
+    if not consent and biometric.face_consent_at is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Explicit face-template consent is required.")
+
+    try:
+        encrypted_template = face_recognition_service.encrypt_face_template(raw)
+    except FaceRecognitionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    samples = _face_template_count(biometric)
+    if samples >= 5:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This enrollment already has five samples. Re-enroll to replace it.")
+    stored = json.loads(biometric.face_templates_ciphertext) if biometric.face_templates_ciphertext else []
+    stored.append(encrypted_template)
+    biometric.face_templates_ciphertext = json.dumps(stored)
+    biometric.face_consent_at = biometric.face_consent_at or datetime.now(timezone.utc)
+    biometric.face_enrolled = len(stored) >= 3
+    biometric.face_reference_id = "campussync-lbph-v1" if biometric.face_enrolled else None
+    db.commit()
+
+    return {
+        "face_enrolled": biometric.face_enrolled,
+        "sample_count": len(stored),
+        "required_samples": 3,
+        "message": "Face sample encrypted and saved." if not biometric.face_enrolled else "Face enrollment is ready.",
+    }
+
+
+@router.get("/me/face-enrollment")
+def get_my_face_enrollment_status(student: Student = Depends(get_current_student)):
+    biometric = student.biometric_identity
+    return {
+        "face_enrolled": bool(biometric and biometric.face_enrolled),
+        "consented": bool(biometric and biometric.face_consent_at),
+        "sample_count": _face_template_count(biometric),
+        "required_samples": 3,
+    }
+
+
+@router.delete("/me/face-enrollment")
+def revoke_my_face_enrollment(
+    student: Student = Depends(get_current_student),
+    db: Session = Depends(get_db),
+):
+    biometric = student.biometric_identity
+    if biometric:
+        biometric.face_enrolled = False
+        biometric.face_reference_id = None
+        biometric.face_templates_ciphertext = None
+        biometric.face_consent_at = None
+        db.commit()
+    return {"face_enrolled": False, "message": "Face templates and consent were removed."}
 
 
 @router.get("/classrooms", response_model=List[StudentClassroomResponse])
@@ -77,6 +165,7 @@ def get_my_student_profile(
         "biometrics": {
             "fingerprint": bool(biometric and biometric.fingerprint_enrolled),
             "face": bool(biometric and biometric.face_enrolled),
+            "face_enrollment_samples": _face_template_count(biometric),
             "rfid": bool(rfid_card and rfid_card.is_active),
             "rfid_uid": rfid_card.card_uid if rfid_card else None
         },

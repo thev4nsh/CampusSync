@@ -42,6 +42,7 @@ import { teacherApi, announcementApi, assetUrl, ApiError } from '../api/api';
 import CourseMaterials from '../components/CourseMaterials';
 import Announcements from '../components/Announcements';
 import Classrooms from '../components/Classrooms';
+import FaceRecognitionScanner from '../components/FaceRecognitionScanner';
 
 const TEACHER_SECTIONS = ['dashboard', 'classrooms', 'take-attendance', 'records', 'students', 'materials', 'announcements', 'classes', 'reports', 'profile'];
 
@@ -91,8 +92,8 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
   const [isEndingSession, setIsEndingSession] = useState(false);
 
   // ================= MANUAL ATTENDANCE ROSTER STATE =================
-  // Manual roll call is the active flow. 'terminal' is reserved for the Phase 2 hardware mode.
-  const [attendanceMode, setAttendanceMode] = useState('manual'); // 'manual' | 'terminal' (coming soon)
+  // Teachers can take attendance by roll call or by the consent-based face-assisted flow.
+  const [attendanceMode, setAttendanceMode] = useState('manual'); // 'manual' | 'face'
   const [rosterStudents, setRosterStudents] = useState([]);
   const [rosterLoading, setRosterLoading] = useState(false);
   const [rosterError, setRosterError] = useState(null);
@@ -949,7 +950,7 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                     <p className="text-xs text-slate-500 mt-0.5">Configure class, subject, and marking mode</p>
                   </div>
 
-                  {/* Mode Selector — Manual Roll Call is the active flow; hardware arrives in Phase 2 */}
+                  {/* Choose manual roll call or browser-camera face-assisted attendance. */}
                   <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200">
                     <button
                       type="button"
@@ -964,16 +965,16 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                     </button>
                     <button
                       type="button"
-                      disabled
-                      title="RFID, fingerprint, and face-recognition terminals arrive in Phase 2"
-                      className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-not-allowed ${
-                        attendanceMode === 'terminal'
+                      onClick={() => setAttendanceMode('face')}
+                      title="Scan opted-in students with the teacher's camera and confirm each match"
+                      className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                        attendanceMode === 'face'
                           ? 'bg-white text-blue-700 shadow-sm'
-                          : 'text-slate-400'
+                          : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      <Lock className="w-3.5 h-3.5" />
-                      Hardware Terminal (Phase 2)
+                      <Camera className="w-3.5 h-3.5" />
+                      Face Assisted
                     </button>
                   </div>
                 </div>
@@ -1036,7 +1037,7 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                     />
                   </div>
 
-                  {!activeSession && attendanceMode === 'terminal' && (
+                  {!activeSession && (
                     <div className="sm:col-span-3 pt-2">
                       <button
                         type="submit"
@@ -1067,8 +1068,25 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                 )}
               </div>
 
-              {/* ================= HARDWARE TERMINAL WAITING INTERFACE (NO SIMULATION) ================= */}
-              {attendanceMode === 'terminal' && activeSession && (
+              {attendanceMode === 'manual' && activeSession && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                  <div>
+                    <p className="text-sm font-bold text-emerald-900">Attendance session active</p>
+                    <p className="text-xs text-emerald-800">{activeSession.subject_name} · {activeSession.class_name} · {activeSession.id}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleEndSession}
+                    disabled={isEndingSession}
+                    className="px-4 py-2 rounded-lg bg-rose-600 text-white text-xs font-bold disabled:opacity-60"
+                  >
+                    {isEndingSession ? 'Ending…' : 'End Session'}
+                  </button>
+                </div>
+              )}
+
+              {/* ================= FACE-ASSISTED ATTENDANCE SESSION ================= */}
+              {attendanceMode === 'face' && activeSession && (
                 <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 lg:p-8 text-white shadow-2xl space-y-6">
                   {/* Session Header */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
@@ -1102,7 +1120,7 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                   {/* Real Live Hardware Waiting Cards */}
                   <div>
                     <h5 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
-                      Connected Multi-Modal Terminal Hardware Network
+                      Other attendance input integrations
                     </h5>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       
@@ -1150,14 +1168,16 @@ export default function Teacher({ currentUser, onLogout, showToast, institutionI
                           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                         </div>
                         <p className="text-xs text-slate-300 font-mono">
-                          Status: Waiting for recognition stream...
+                          Teacher camera available · confirmation required
                         </p>
                         <p className="text-[11px] text-slate-500">
-                          Camera service posts to: <span className="font-mono text-slate-400">/attendance/face</span>
+                          Scan endpoint: <span className="font-mono text-slate-400">/attendance/face/recognize</span>
                         </p>
                       </div>
                     </div>
                   </div>
+
+                  <FaceRecognitionScanner sessionId={activeSession.id} onRecorded={() => showToast?.('Face assisted attendance recorded.', 'success')} />
 
                   {/* Real Live Attendance Feed Table */}
                   <div className="bg-slate-950/60 rounded-xl border border-slate-800 p-4 space-y-3">

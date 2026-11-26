@@ -9,7 +9,7 @@
 
 **CampusSync** is an institutional campus attendance and administration management system designed to eliminate proxy attendance, streamline faculty administration, and provide verifiable audit logs.
 
-The platform is being built around a **FastAPI** backend and **PostgreSQL** database. Attendance ingestion supports authenticated RFID, fingerprint, and face-edge device submissions. Recognition hardware/model, biometric consent, retention, and institutional isolation still need deployment-specific implementation and review.
+The platform uses a **FastAPI** backend and **PostgreSQL** database. Attendance supports RFID, fingerprint-terminal submissions, manual teacher entry, and an opt-in browser-camera face matching prototype. Course-material summaries and grounded question answering use Google's Gemini API when `GEMINI_API_KEY` is configured. Face matching suggests a candidate only; a teacher must verify the student in person and explicitly confirm each mark. Face samples are encrypted at rest, consent can be revoked, and no raw camera frame is retained. This prototype does not provide liveness detection or anti-spoofing and should not be treated as a production biometric system.
 
 ```text
   Web Portals (Student / Teacher / Admin)
@@ -23,13 +23,12 @@ The platform is being built around a **FastAPI** backend and **PostgreSQL** data
 │  └─ CORS & Exception Middleware                             │
 └──────────────┬──────────────────────────────▲───────────────┘
                │                              │
-               ▼                              │ [IoT REST / HTTPS]
-┌──────────────────────────────┐ ┌────────────┴───────────────┐
-│     PostgreSQL Database      │ │ Physical Terminal Network  │
-│  (ACID Relational Storage)   │ │  ├─ ESP32 + RFID Reader    │
-│                              │ │  ├─ Biometric Fingerprint  │
-│                              │ │  └─ Edge AI Face Camera    │
-└──────────────────────────────┘ └────────────────────────────┘
+               ▼                              ▲
+┌──────────────────────────────┐              │ [HTTPS / REST]
+│     PostgreSQL Database      │   ┌──────────┴───────────────┐
+│  (ACID Relational Storage)   │   │ RFID / fingerprint gear │
+└──────────────────────────────┘   │ Teacher browser camera  │
+                                   └──────────────────────────┘
 ```
 
 ---
